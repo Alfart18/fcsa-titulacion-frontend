@@ -158,3 +158,46 @@ export async function iniciarSesionApi(
     body: JSON.stringify({ correo, password }),
   });
 }
+
+export async function abrirPdfAutenticado(
+  endpoint: string,
+  servicio: MicroservicioDestino = 'documentos',
+  descargar = false,
+  nombreArchivoDescarga = 'resolucion_uac.pdf',
+): Promise<void> {
+  const baseUrl = URLS_MICROSERVICIOS[servicio];
+  const rutaLimpia = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const token = obtenerToken();
+
+  const response = await fetch(`${baseUrl}${rutaLimpia}`, {
+    method: 'GET',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+
+  if (!response.ok) {
+    let mensaje = 'No se pudo generar o descargar el documento PDF.';
+    try {
+      const errJson = await response.json();
+      if (errJson.message) mensaje = errJson.message;
+    } catch {
+      // Ignorar si no es JSON
+    }
+    throw new ApiError(response.status, mensaje);
+  }
+
+  const blob = await response.blob();
+  const blobUrl = URL.createObjectURL(blob);
+
+  if (descargar) {
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = nombreArchivoDescarga;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } else {
+    window.open(blobUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+}
