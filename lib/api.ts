@@ -201,3 +201,91 @@ export async function abrirPdfAutenticado(
 
   setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
 }
+
+export async function descargarZipPendientesApi(filtros?: {
+  serie?: 'ORD' | 'CF';
+  expedienteId?: string;
+}): Promise<void> {
+  const baseUrl = URLS_MICROSERVICIOS.firmas;
+  const params = new URLSearchParams();
+  if (filtros?.serie) params.set('serie', filtros.serie);
+  if (filtros?.expedienteId) params.set('expedienteId', filtros.expedienteId);
+
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const token = obtenerToken();
+
+  const response = await fetch(`${baseUrl}/firmas/pendientes/zip${query}`, {
+    method: 'GET',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+
+  if (!response.ok) {
+    let mensaje = 'No se pudo generar el archivo ZIP de resoluciones pendientes.';
+    try {
+      const errJson = await response.json();
+      if (errJson.message) mensaje = errJson.message;
+    } catch {}
+    throw new ApiError(response.status, mensaje);
+  }
+
+  const blob = await response.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const fechaStr = new Date().toISOString().slice(0, 10);
+
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = `LOTE_PENDIENTES_FIRMA_FCSA_${fechaStr}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+}
+
+export async function simularFirmaPkcs7Api(
+  resolucionId: string,
+  numeroCompleto: string,
+  versionPdf: number,
+  simularTocapuSinMetadatosInfo: boolean,
+  descargarEnPc = true,
+): Promise<File> {
+  const baseUrl = URLS_MICROSERVICIOS.firmas;
+  const token = obtenerToken();
+
+  const response = await fetch(
+    `${baseUrl}/firmas/dev/simular-firma-pdf/${resolucionId}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ simularTocapuSinMetadatosInfo }),
+    },
+  );
+
+  if (!response.ok) {
+    let mensaje = 'Error al ejecutar el simulador de firma PKCS#7.';
+    try {
+      const errJson = await response.json();
+      if (errJson.message) mensaje = errJson.message;
+    } catch {}
+    throw new ApiError(response.status, mensaje);
+  }
+
+  const blob = await response.blob();
+  const nombreArchivo = `${numeroCompleto}_v${versionPdf}_FIRMADO.pdf`;
+
+  if (descargarEnPc) {
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = nombreArchivo;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  }
+
+  return new File([blob], nombreArchivo, { type: 'application/pdf' });
+}
