@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError, guardarSesion, iniciarSesionApi } from '@/lib/api';
+import Image from 'next/image';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -41,7 +42,6 @@ export default function LoginPage() {
         if (err.status === 401) {
           setErrorMensaje('Credenciales incorrectas');
         } else {
-          // Por ejemplo 403 cuando la cuenta está DESACTIVADA o 400 por formato de correo
           setErrorMensaje(err.message);
         }
       } else {
@@ -55,95 +55,86 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col justify-center items-center px-4 py-12">
-      {/* Tarjeta Blanca Centrada con Sombra */}
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-gray-100 p-8 sm:p-10">
-        {/* Encabezado y Logo Institucional UAC */}
-        <div className="flex flex-col items-center text-center mb-8">
-          <div className="w-16 h-16 rounded-full bg-[#0B2B5A] text-white flex items-center justify-center font-bold text-xl tracking-wider shadow-md mb-4 select-none">
-            UAC
-          </div>
-          <h1 className="text-xl font-bold text-gray-900 tracking-tight">
-            Universidad Andina del Cusco
-          </h1>
-          <p className="text-sm font-medium text-[#0B2B5A] mt-0.5">
-            Facultad de Ciencias de la Salud
-          </p>
-          <p className="text-xs text-gray-500 mt-1">
-            Sistema de Gestión de Resoluciones para Titulación
-          </p>
+    <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center font-sans p-4">
+      
+      {/* Tarjeta del Login */}
+      <div className="w-full max-w-[400px] bg-white rounded-2xl shadow-xl border border-gray-100 p-8 sm:p-10">
+        
+        {/* Títulos */}
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold text-gray-900 mb-2 tracking-tight">Ingreso</h1>
+          <p className="text-sm text-gray-500">Ingrese sus credenciales de acceso</p>
         </div>
 
-        {/* Alerta de Error (401 Credenciales incorrectas / 403 Cuenta desactivada) */}
+        {/* Alerta de Error */}
         {errorMensaje && (
-          <div
-            role="alert"
-            className="mb-6 flex items-center gap-2.5 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700"
-          >
+          <div className="mb-5 flex items-center gap-2.5 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
             <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
             <span className="font-medium">{errorMensaje}</span>
           </div>
         )}
 
-        {/* Formulario de Inicio de Sesión */}
+        {/* Formulario */}
         <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-          {/* Campo de Correo Institucional */}
+          
+          {/* Email con Icono */}
           <div>
-            <label
-              htmlFor="correo"
-              className="block text-xs font-semibold uppercase tracking-wider text-gray-700 mb-2"
-            >
+            <label htmlFor="correo" className="block text-sm font-semibold text-gray-700 mb-1.5">
               Correo Institucional
             </label>
             <div className="relative">
-              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
                 <Mail className="h-5 w-5 text-gray-400" />
               </div>
               <input
                 id="correo"
-                name="correo"
                 type="email"
                 autoComplete="email"
                 required
                 value={correo}
                 onChange={(e) => setCorreo(e.target.value)}
-                placeholder="usuario@uandina.edu.pe"
                 disabled={cargando}
-                className="block w-full rounded-lg border border-gray-300 bg-white pl-11 pr-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-[#0B2B5A] focus:outline-none focus:ring-2 focus:ring-[#0B2B5A]/20 disabled:bg-gray-100 transition"
+                placeholder="usuario@uandina.edu.pe"
+                className="w-full border border-gray-300 rounded-xl pl-10 pr-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-[#0B2B5A] focus:outline-none focus:ring-2 focus:ring-[#0B2B5A]/20 disabled:bg-gray-50 transition-colors"
               />
             </div>
           </div>
 
-          {/* Campo de Contraseña con Candado y Ojito */}
+          {/* Contraseña con Iconos */}
           <div>
-            <label
-              htmlFor="password"
-              className="block text-xs font-semibold uppercase tracking-wider text-gray-700 mb-2"
-            >
-              Contraseña
-            </label>
+            <div className="flex justify-between items-center mb-1.5">
+              <label htmlFor="password" className="block text-sm font-semibold text-gray-700">
+                Contraseña
+              </label>
+              <a href="#" className="text-xs font-medium text-gray-500 hover:text-[#0B2B5A] hover:underline">
+                ¿Olvidó su contraseña?
+              </a>
+            </div>
             <div className="relative">
-              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
+              {/* Icono Candado Izquierda */}
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
                 <Lock className="h-5 w-5 text-gray-400" />
               </div>
+              {/* Input */}
               <input
                 id="password"
-                name="password"
                 type={mostrarPassword ? 'text' : 'password'}
                 autoComplete="current-password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
                 disabled={cargando}
-                className="block w-full rounded-lg border border-gray-300 bg-white pl-11 pr-11 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-[#0B2B5A] focus:outline-none focus:ring-2 focus:ring-[#0B2B5A]/20 disabled:bg-gray-100 transition"
+                placeholder="••••••••••••"
+                className="w-full border border-gray-300 rounded-xl pl-10 pr-10 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-[#0B2B5A] focus:outline-none focus:ring-2 focus:ring-[#0B2B5A]/20 disabled:bg-gray-50 transition-colors"
               />
+              {/* Icono Ojito Derecha */}
               <button
                 type="button"
                 onClick={() => setMostrarPassword((prev) => !prev)}
                 tabIndex={-1}
+                disabled={cargando}
                 aria-label={mostrarPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                className="absolute inset-y-0 right-0 flex items-center pr-3.5 text-gray-400 hover:text-gray-600 focus:outline-none"
+                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none disabled:opacity-50"
               >
                 {mostrarPassword ? (
                   <EyeOff className="h-5 w-5" />
@@ -154,29 +145,57 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Botón Institucional UAC (#0B2B5A) */}
+          {/* Botón Ingresar */}
           <button
             type="submit"
             disabled={cargando}
-            className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#0B2B5A] px-4 py-3 text-sm font-semibold text-white shadow-md hover:bg-[#082044] focus:outline-none focus:ring-2 focus:ring-[#0B2B5A] focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed transition-colors mt-2"
+            className="w-full flex items-center justify-center gap-2 bg-[#2880C5] text-white font-semibold rounded-xl py-3 text-sm hover:bg-[#1E73BE] transition-colors mt-4 shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
           >
             {cargando ? (
               <>
                 <Loader2 className="h-5 w-5 animate-spin" />
-                <span>Verificando credenciales...</span>
+                <span>Verificando...</span>
               </>
             ) : (
-              <span>Iniciar Sesión</span>
+              <span>Ingresar al Sistema</span>
             )}
           </button>
         </form>
 
-        {/* Pie de tarjeta informativo */}
-        <div className="mt-8 pt-5 border-t border-gray-100 text-center">
-          <p className="text-xs text-gray-400">
-            Acceso exclusivo para personal autorizado del Decanato y Secretaría Académica — FCSa UAC
+                {/* Zona de Logos */}
+        <div className="mt-8 pt-6 border-t border-gray-100 flex flex-col items-center justify-center gap-4">
+          <p className="text-[11px] text-gray-500 font-medium uppercase tracking-widest text-center mb-1">
+            Universidad Andina del Cusco<br />Facultad de Ciencias de la Salud
           </p>
+          
+          <div className="flex items-center justify-center gap-6">
+            {/* Logo UAC (Más grande) */}
+            <div className="relative h-12 w-32 sm:h-14 sm:w-36">
+              <Image 
+                src="/logo-uac.png" 
+                alt="UAC" 
+                fill
+                className="object-contain" 
+                priority
+              />
+            </div>
+            
+            {/* Separador (Más alto para acompañar el nuevo tamaño) */}
+            <div className="w-px h-12 bg-gray-300"></div>
+
+            {/* Logo FCSa (Más grande) */}
+            <div className="relative h-16 w-16 sm:h-20 sm:w-20">
+              <Image 
+                src="/logo-fcsa.png" 
+                alt="FCSa" 
+                fill
+                className="object-contain" 
+                priority
+              />
+            </div>
+          </div>
         </div>
+
       </div>
     </div>
   );
