@@ -100,16 +100,11 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Contraseña con Iconos */}
+          {/* Contraseña con Iconos (SIN EL ENLACE) */}
           <div>
-            <div className="flex justify-between items-center mb-1.5">
-              <label htmlFor="password" className="block text-sm font-semibold text-gray-700">
-                Contraseña
-              </label>
-              <a href="#" className="text-xs font-medium text-gray-500 hover:text-[#0B2B5A] hover:underline">
-                ¿Olvidó su contraseña?
-              </a>
-            </div>
+            <label htmlFor="password" className="block text-sm font-semibold text-gray-700 mb-1.5">
+              Contraseña
+            </label>
             <div className="relative">
               {/* Icono Candado Izquierda */}
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
@@ -162,7 +157,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-                {/* Zona de Logos */}
+        {/* Zona de Logos */}
         <div className="mt-8 pt-6 border-t border-gray-100 flex flex-col items-center justify-center gap-4">
           <p className="text-[11px] text-gray-500 font-medium uppercase tracking-widest text-center mb-1">
             Universidad Andina del Cusco<br />Facultad de Ciencias de la Salud

@@ -3,31 +3,17 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  FolderKanban,
-  FileSignature,
-  BookOpen,
-  BookMarked,
-  Users,
-  GraduationCap,
-  ShieldAlert,
-  History,
-  LayoutDashboard,
-  LogOut,
-  Menu,
-  X,
-  Award,
-  ListChecks,
+  FolderKanban, FileSignature, BookOpen, BookMarked, Users, GraduationCap,
+  ShieldAlert, History, LayoutDashboard, LogOut, Menu, X, ListChecks
 } from 'lucide-react';
 import { toast } from 'sonner';
-import {
-  apiFetch,
-  cerrarSesion,
-  obtenerUsuarioSesion,
-  RolUsuario,
-  UsuarioSesion,
-} from '@/lib/api';
+import { cerrarSesion, obtenerUsuarioSesion, RolUsuario, UsuarioSesion } from '@/lib/api';
+
+// IMPORTAMOS EL CONTEXTO DESDE EL ARCHIVO NUEVO
+import { SidebarContext } from './sidebar-context';
 
 interface ItemNavegacion {
   nombre: string;
@@ -38,100 +24,26 @@ interface ItemNavegacion {
   badgeTexto?: string;
 }
 
-interface DecanoVigenteInfo {
-  id: string;
-  nombreCompletoFormateado: string;
-  iniciales: string;
-  correo: string;
-}
-
 const MENU_ITEMS: ItemNavegacion[] = [
-  {
-    nombre: 'Resumen General',
-    href: '/dashboard',
-    icono: LayoutDashboard,
-    rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'],
-    seccion: 'OPERATIVO',
-  },
-  {
-    nombre: 'Expedientes y 7 Pasos',
-    href: '/dashboard/expedientes',
-    icono: FolderKanban,
-    rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'],
-    seccion: 'OPERATIVO',
-  },
-  {
-    nombre: 'Lotes y Firmas PKCS#7',
-    href: '/dashboard/firmas',
-    icono: FileSignature,
-    rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'],
-    seccion: 'OPERATIVO',
-  },
-  {
-    nombre: 'Libro de Numeración',
-    href: '/dashboard/numeracion',
-    icono: BookOpen,
-    rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'],
-    seccion: 'OPERATIVO',
-    badgeTexto: 'ORD / CF',
-  },
-  {
-    nombre: 'Libro de Inscripción',
-    href: '/dashboard/libro-inscripcion',
-    icono: BookMarked,
-    rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'],
-    seccion: 'OPERATIVO',
-  },
-  {
-    nombre: 'Catálogo de Docentes',
-    href: '/dashboard/docentes',
-    icono: GraduationCap,
-    rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'],
-    seccion: 'OPERATIVO',
-  },
-  {
-    nombre: 'Catálogo de Causas',
-    href: '/dashboard/causas',
-    icono: ListChecks,
-    rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'],
-    seccion: 'OPERATIVO',
-  },
-  {
-    nombre: 'Mi Actividad',
-    href: '/dashboard/mi-actividad',
-    icono: History,
-    rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'],
-    seccion: 'OPERATIVO',
-  },
-  // SECCIÓN DE SUPERVISIÓN Y GOBIERNO (Filtrada estrictamente por Rol)
-  {
-    nombre: 'Auditoría Global',
-    href: '/dashboard/auditoria',
-    icono: ShieldAlert,
-    rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA'],
-    seccion: 'GOBIERNO',
-  },
-  {
-    nombre: 'Usuarios y Decano Firmante',
-    href: '/dashboard/usuarios',
-    icono: Users,
-    rolesPermitidos: ['DECANO'],
-    seccion: 'GOBIERNO',
-    badgeTexto: 'DECANO',
-  },
+  { nombre: 'Resumen General', href: '/dashboard', icono: LayoutDashboard, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
+  { nombre: 'Expedientes y 7 Pasos', href: '/dashboard/expedientes', icono: FolderKanban, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
+  { nombre: 'Lotes y Firmas PKCS#7', href: '/dashboard/firmas', icono: FileSignature, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
+  { nombre: 'Libro de Numeración', href: '/dashboard/numeracion', icono: BookOpen, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO', badgeTexto: 'ORD / CF' },
+  { nombre: 'Libro de Inscripción', href: '/dashboard/libro-inscripcion', icono: BookMarked, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
+  { nombre: 'Catálogo de Docentes', href: '/dashboard/docentes', icono: GraduationCap, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
+  { nombre: 'Catálogo de Causas', href: '/dashboard/causas', icono: ListChecks, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
+  { nombre: 'Mi Actividad', href: '/dashboard/mi-actividad', icono: History, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
+  { nombre: 'Auditoría Global', href: '/dashboard/auditoria', icono: ShieldAlert, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA'], seccion: 'GOBIERNO' },
+  { nombre: 'Usuarios y Decano Firmante', href: '/dashboard/usuarios', icono: Users, rolesPermitidos: ['DECANO'], seccion: 'GOBIERNO', badgeTexto: 'DECANO' },
 ];
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
   const [usuario, setUsuario] = useState<UsuarioSesion | null>(null);
-  const [decanoVigente, setDecanoVigente] = useState<DecanoVigenteInfo | null>(null);
   const [menuMovilAbierto, setMenuMovilAbierto] = useState(false);
+  const [sidebarAbierto, setSidebarAbierto] = useState(true);
 
   useEffect(() => {
     const sesionLocal = obtenerUsuarioSesion();
@@ -140,15 +52,6 @@ export default function DashboardLayout({
       return;
     }
     setTimeout(() => setUsuario(sesionLocal), 0);
-
-    // Consultar dinámicamente quién tiene el flag esDecanoFirmante = true en identidad-service
-    apiFetch<DecanoVigenteInfo>('/institucional/decano-vigente', {
-      servicio: 'identidad',
-    })
-      .then((data) => setDecanoVigente(data))
-      .catch(() => {
-        // Silencioso si ocurre error de red puntual
-      });
   }, [router]);
 
   const handleCerrarSesion = () => {
@@ -157,25 +60,20 @@ export default function DashboardLayout({
     router.replace('/login');
   };
 
+  const toggleSidebar = () => setSidebarAbierto(!sidebarAbierto);
+
   if (!usuario) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-sm font-medium text-gray-500 animate-pulse">
+        <div className="text-sm font-medium text-[#1E73BE] animate-pulse">
           Cargando entorno institucional FCSa - UAC...
         </div>
       </div>
     );
   }
 
-  const itemsOperativos = MENU_ITEMS.filter(
-    (item) =>
-      item.seccion === 'OPERATIVO' && item.rolesPermitidos.includes(usuario.rol),
-  );
-
-  const itemsGobierno = MENU_ITEMS.filter(
-    (item) =>
-      item.seccion === 'GOBIERNO' && item.rolesPermitidos.includes(usuario.rol),
-  );
+  const itemsOperativos = MENU_ITEMS.filter((item) => item.seccion === 'OPERATIVO' && item.rolesPermitidos.includes(usuario.rol));
+  const itemsGobierno = MENU_ITEMS.filter((item) => item.seccion === 'GOBIERNO' && item.rolesPermitidos.includes(usuario.rol));
 
   const formatearEtiquetaRol = (rol: RolUsuario) => {
     if (rol === 'DECANO') return 'Decano';
@@ -183,200 +81,135 @@ export default function DashboardLayout({
     return 'Administrativo';
   };
 
+  const obtenerNombreLimpio = (nombreCrudo: string) => {
+    const nombre = nombreCrudo.replace(/^(Ing\.|Dr\.|Dra\.|Mg\.|Lic\.|Mtro\.|Mtra\.)\s+/i, '');
+    const partes = nombre.split(' ');
+    if (partes.length > 3) {
+      return `${partes[0]} ${partes.slice(2).join(' ')}`;
+    }
+    return nombre;
+  };
+
+  const nombreMostrar = obtenerNombreLimpio(usuario.nombresCompletos);
+
   return (
-    <div className="min-h-screen bg-gray-50 flex">
-      {/* =================================================================== */}
-      {/* BARRA LATERAL INSTITUCIONAL (#0B2B5A)                               */}
-      {/* =================================================================== */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 bg-[#0B2B5A] text-white flex flex-col justify-between transition-transform duration-200 lg:static lg:translate-x-0 ${
-          menuMovilAbierto ? 'translate-x-0' : '-translate-x-full'
-        }`}
-      >
-        <div>
-          {/* Cabecera del Sidebar */}
-          <div className="px-5 py-5 border-b border-white/10 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-white text-[#0B2B5A] flex items-center justify-center font-extrabold text-sm tracking-wider shadow">
-                UAC
+    <SidebarContext.Provider value={{ sidebarAbierto, toggleSidebar }}>
+      <div className="min-h-screen bg-[#F8FAFC] flex font-sans overflow-hidden">
+        
+        {/* BARRA LATERAL */}
+        <aside
+          className={`fixed inset-y-0 left-0 z-40 bg-white border-r border-gray-200 flex flex-col justify-between transition-all duration-300 ease-in-out
+            ${menuMovilAbierto ? 'translate-x-0 w-72' : '-translate-x-full w-72'}
+            ${sidebarAbierto ? 'lg:static lg:translate-x-0 lg:w-72' : 'lg:w-0 lg:opacity-0 lg:overflow-hidden lg:border-none'}
+          `}
+        >
+          <div className="flex flex-col h-full min-w-[288px]">
+            {/* Cabecera del Sidebar (SIN BOTÓN) */}
+            <div className="px-6 py-8 flex flex-col items-center justify-center border-b border-gray-100 relative">
+              <div className="relative w-16 h-16 mb-3">
+                <Image src="/logo-fcsa.png" alt="Logo FCSa" fill className="object-contain" priority />
               </div>
-              <div>
-                <h2 className="text-sm font-bold tracking-wide leading-tight">
-                  FCSa — UAC
-                </h2>
-                <p className="text-[11px] text-blue-200">
-                  Sistema de Titulación
-                </p>
-              </div>
+              <h2 className="text-xs font-bold text-gray-800 text-center tracking-wide leading-relaxed uppercase">
+                Facultad de Ciencias<br />de la Salud
+              </h2>
+              
+              <button
+                type="button"
+                onClick={() => setMenuMovilAbierto(false)}
+                className="lg:hidden absolute top-4 right-4 text-gray-500 hover:text-gray-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setMenuMovilAbierto(false)}
-              className="lg:hidden text-blue-200 hover:text-white"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
 
-          {/* Navegación Operativa */}
-          <nav className="p-3 space-y-1">
-            <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-300/80">
-              Gestión Operativa
-            </p>
-            {itemsOperativos.map((item) => {
-              const Icono = item.icono;
-              const activo =
-                item.href === '/dashboard'
-                  ? pathname === '/dashboard'
-                  : pathname.startsWith(item.href);
+            {/* Navegación */}
+            <nav className="flex-1 p-4 space-y-1 overflow-y-auto custom-scrollbar">
+              <p className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-400">Gestión Operativa</p>
+              {itemsOperativos.map((item) => {
+                const Icono = item.icono;
+                const activo = item.href === '/dashboard' ? pathname === '/dashboard' : pathname.startsWith(item.href);
+                return (
+                  <Link key={item.href} href={item.href} onClick={() => setMenuMovilAbierto(false)}
+                    className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors group ${activo ? 'bg-blue-50 text-[#1E73BE]' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Icono className={`w-4 h-4 shrink-0 ${activo ? 'text-[#1E73BE]' : 'text-gray-400 group-hover:text-gray-600'}`} />
+                      <span>{item.nombre}</span>
+                    </div>
+                    {item.badgeTexto && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold ${activo ? 'bg-[#1E73BE]/10 text-[#1E73BE]' : 'bg-gray-100 text-gray-500'}`}>
+                        {item.badgeTexto}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
 
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setMenuMovilAbierto(false)}
-                  className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-colors ${
-                    activo
-                      ? 'bg-white text-[#0B2B5A] font-semibold shadow-sm'
-                      : 'text-blue-100 hover:bg-white/10 hover:text-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <Icono className="w-4 h-4 shrink-0" />
-                    <span>{item.nombre}</span>
+              {itemsGobierno.length > 0 && (
+                <div className="pt-4 mt-4 border-t border-gray-100 space-y-1">
+                  <p className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-amber-500">Supervisión y Gobierno</p>
+                  {itemsGobierno.map((item) => {
+                    const Icono = item.icono;
+                    const activo = pathname.startsWith(item.href);
+                    return (
+                      <Link key={item.href} href={item.href} onClick={() => setMenuMovilAbierto(false)}
+                        className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors group ${activo ? 'bg-amber-50 text-amber-700' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Icono className={`w-4 h-4 shrink-0 ${activo ? 'text-amber-600' : 'text-gray-400 group-hover:text-gray-600'}`} />
+                          <span>{item.nombre}</span>
+                        </div>
+                        {item.badgeTexto && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${activo ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
+                            {item.badgeTexto}
+                          </span>
+                        )}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </nav>
+
+            {/* Perfil */}
+            <div className="p-4 border-t border-gray-100 bg-white">
+              <div className="flex items-center justify-between p-2 rounded-xl transition-colors">
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <div className="w-9 h-9 rounded-full bg-[#1E73BE] text-white flex items-center justify-center font-bold text-sm shrink-0 uppercase">
+                    {nombreMostrar.charAt(0)}
                   </div>
-                  {item.badgeTexto && (
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold ${
-                        activo
-                          ? 'bg-[#0B2B5A]/10 text-[#0B2B5A]'
-                          : 'bg-white/10 text-blue-200'
-                      }`}
-                    >
-                      {item.badgeTexto}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-
-            {/* Navegación de Supervisión y Gobierno (Solo se muestra si el Rol tiene permisos) */}
-            {itemsGobierno.length > 0 && (
-              <div className="pt-4 mt-4 border-t border-white/10 space-y-1">
-                <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-300/90">
-                  Supervisión y Gobierno
-                </p>
-                {itemsGobierno.map((item) => {
-                  const Icono = item.icono;
-                  const activo = pathname.startsWith(item.href);
-
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      onClick={() => setMenuMovilAbierto(false)}
-                      className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-colors ${
-                        activo
-                          ? 'bg-white text-[#0B2B5A] font-semibold shadow-sm'
-                          : 'text-blue-100 hover:bg-white/10 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Icono className="w-4 h-4 shrink-0" />
-                        <span>{item.nombre}</span>
-                      </div>
-                      {item.badgeTexto && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold bg-amber-400/20 text-amber-300">
-                          {item.badgeTexto}
-                        </span>
-                      )}
-                    </Link>
-                  );
-                })}
+                  <div className="flex flex-col overflow-hidden">
+                    <span className="text-sm font-semibold text-gray-900 uppercase truncate">{nombreMostrar}</span>
+                    <span className="text-xs text-gray-500 truncate">{formatearEtiquetaRol(usuario.rol)}</span>
+                  </div>
+                </div>
+                <button type="button" onClick={handleCerrarSesion} title="Cerrar Sesión" className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors shrink-0">
+                  <LogOut className="w-4 h-4" />
+                </button>
               </div>
-            )}
-          </nav>
-        </div>
-
-        {/* Pie del Sidebar: Ficha del Usuario en Sesión y Botón Salir */}
-        <div className="p-4 border-t border-white/10 bg-[#082044]">
-          <div className="flex items-center justify-between mb-3">
-            <div className="truncate pr-2">
-              <p className="text-xs font-bold text-white truncate">
-                {usuario.nombresCompletos}
-              </p>
-              <p className="text-[11px] text-blue-200 truncate">
-                {formatearEtiquetaRol(usuario.rol)}
-              </p>
             </div>
-            <span className="px-2 py-1 rounded bg-white/15 text-white font-mono text-xs font-bold shrink-0">
-              /{usuario.iniciales}
-            </span>
           </div>
+        </aside>
+
+        {/* CONTENEDOR PRINCIPAL */}
+        <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden relative bg-[#F8FAFC]">
+          
+          {/* Botón flotante solo para móvil */}
           <button
             type="button"
-            onClick={handleCerrarSesion}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-200 text-xs font-semibold transition-colors"
+            onClick={() => setMenuMovilAbierto(true)}
+            className="lg:hidden absolute top-6 left-6 z-50 p-2 bg-white border border-gray-200 rounded-lg shadow-sm text-gray-600"
           >
-            <LogOut className="w-4 h-4" />
-            <span>Cerrar Sesión</span>
+            <Menu className="w-5 h-5" />
           </button>
+
+          <main className="flex-1 overflow-y-auto p-6 sm:p-8 w-full">
+            <div className="w-full">
+              {children}
+            </div>
+          </main>
         </div>
-      </aside>
-
-      {/* =================================================================== */}
-      {/* CONTENEDOR PRINCIPAL (CABECERA SUPERIOR + CONTENIDO)                */}
-      {/* =================================================================== */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Barra Superior Institucional */}
-        <header className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-30">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setMenuMovilAbierto(true)}
-              className="lg:hidden p-2 rounded-lg text-gray-600 hover:bg-gray-100"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-            <div>
-              <h1 className="text-sm sm:text-base font-bold text-gray-900">
-                Facultad de Ciencias de la Salud — UAC
-              </h1>
-              <p className="text-xs text-gray-500">
-                Panel de Control y Trazabilidad de Resoluciones de Titulación
-              </p>
-            </div>
-          </div>
-
-          {/* Indicador Dinámico del Decano Firmante Activo y Rol */}
-          <div className="flex items-center gap-3 flex-wrap">
-            {decanoVigente && (
-              <div className="hidden md:flex items-center gap-2 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-lg text-xs">
-                <Award className="w-4 h-4 text-[#0B2B5A] shrink-0" />
-                <span className="text-gray-600">Decano Firmante:</span>
-                <span className="font-bold text-[#0B2B5A]">
-                  {decanoVigente.nombreCompletoFormateado}
-                </span>
-              </div>
-            )}
-
-            <div className="flex items-center gap-2 bg-gray-100 border border-gray-200 px-3 py-1.5 rounded-lg text-xs">
-              <span className="font-semibold text-gray-700">
-                {formatearEtiquetaRol(usuario.rol)}
-              </span>
-              <span className="text-gray-300">|</span>
-              <span className="font-mono font-bold text-[#0B2B5A]">
-                {usuario.iniciales}
-              </span>
-            </div>
-          </div>
-        </header>
-
-        {/* Área Dinámica de Páginas */}
-        <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto">
-          {children}
-        </main>
       </div>
-    </div>
+    </SidebarContext.Provider>
   );
 }
