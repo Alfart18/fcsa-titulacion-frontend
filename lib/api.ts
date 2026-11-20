@@ -1,6 +1,10 @@
 // Archivo: lib/api.ts
 
-export type RolUsuario = 'DECANO' | 'SECRETARIA_ACADEMICA' | 'ADMINISTRATIVO';
+export type RolUsuario =
+  | 'ADMIN'
+  | 'DECANO'
+  | 'SECRETARIA_ACADEMICA'
+  | 'ADMINISTRATIVO';
 
 export interface UsuarioSesion {
   id: string;
@@ -73,6 +77,34 @@ export function cerrarSesion(): void {
   document.cookie = 'fcsa_token=; path=/; max-age=0; SameSite=Strict';
 }
 
+function manejarExpiracionSesion(status: number, autenticado: boolean): void {
+  if (status === 401 && autenticado && typeof window !== 'undefined') {
+    cerrarSesion();
+    if (!window.location.pathname.startsWith('/login')) {
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+      window.location.href = '/login';
+    }
+  }
+}
+
+async function extraerMensajeError(
+  response: Response,
+  mensajePorDefecto: string,
+): Promise<string> {
+  try {
+    const errorData = (await response.json()) as { message?: string | string[] };
+    if (Array.isArray(errorData.message) && errorData.message.length > 0) {
+      return errorData.message.join(' | ');
+    }
+    if (typeof errorData.message === 'string' && errorData.message.trim()) {
+      return errorData.message;
+    }
+  } catch {
+    // Si la respuesta de error no es JSON
+  }
+  return mensajePorDefecto;
+}
+
 // ============================================================================
 // CLIENTE HTTP CENTRALIZADO PARA LOS 4 MICROSERVICIOS
 // ============================================================================
@@ -116,28 +148,16 @@ export async function apiFetch<T>(
   });
 
   if (!response.ok) {
-    let mensajeServidor = 'Ocurrió un error al comunicarse con el servidor.';
-    try {
-      const errorData = await response.json();
-      if (Array.isArray(errorData.message)) {
-        mensajeServidor = errorData.message[0];
-      } else if (typeof errorData.message === 'string') {
-        mensajeServidor = errorData.message;
-      }
-    } catch {
-      // Si la respuesta de error no es JSON
-    }
-
-    // Si una petición protegida recibe 401 (token expirado o inválido), limpiar sesión
-    if (response.status === 401 && autenticado && typeof window !== 'undefined') {
-      cerrarSesion();
-      if (!window.location.pathname.startsWith('/login')) {
-        // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-        window.location.href = '/login';
-      }
-    }
-
+    const mensajeServidor = await extraerMensajeError(
+      response,
+      'Ocurrió un error al comunicarse con el servidor.',
+    );
+    manejarExpiracionSesion(response.status, autenticado);
     throw new ApiError(response.status, mensajeServidor);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return response.json() as Promise<T>;
@@ -159,6 +179,10 @@ export async function iniciarSesionApi(
   });
 }
 
+// ============================================================================
+// DESCARGA Y VISUALIZACIÓN DE DOCUMENTOS PDF Y LOTES ZIP AUTENTICADOS
+// ============================================================================
+
 export async function abrirPdfAutenticado(
   endpoint: string,
   servicio: MicroservicioDestino = 'documentos',
@@ -175,13 +199,11 @@ export async function abrirPdfAutenticado(
   });
 
   if (!response.ok) {
-    let mensaje = 'No se pudo generar o descargar el documento PDF.';
-    try {
-      const errJson = await response.json();
-      if (errJson.message) mensaje = errJson.message;
-    } catch {
-      // Ignorar si no es JSON
-    }
+    const mensaje = await extraerMensajeError(
+      response,
+      'No se pudo generar o descargar el documento PDF.',
+    );
+    manejarExpiracionSesion(response.status, true);
     throw new ApiError(response.status, mensaje);
   }
 
@@ -220,11 +242,11 @@ export async function descargarZipPendientesApi(filtros?: {
   });
 
   if (!response.ok) {
-    let mensaje = 'No se pudo generar el archivo ZIP de resoluciones pendientes.';
-    try {
-      const errJson = await response.json();
-      if (errJson.message) mensaje = errJson.message;
-    } catch {}
+    const mensaje = await extraerMensajeError(
+      response,
+      'No se pudo generar el archivo ZIP de resoluciones pendientes.',
+    );
+    manejarExpiracionSesion(response.status, true);
     throw new ApiError(response.status, mensaje);
   }
 
@@ -240,52 +262,4 @@ export async function descargarZipPendientesApi(filtros?: {
   a.remove();
 
   setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-}
-
-export async function simularFirmaPkcs7Api(
-  resolucionId: string,
-  numeroCompleto: string,
-  versionPdf: number,
-  simularTocapuSinMetadatosInfo: boolean,
-  descargarEnPc = true,
-): Promise<File> {
-  const baseUrl = URLS_MICROSERVICIOS.firmas;
-  const token = obtenerToken();
-
-  const response = await fetch(
-    `${baseUrl}/firmas/dev/simular-firma-pdf/${resolucionId}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ simularTocapuSinMetadatosInfo }),
-    },
-  );
-
-  if (!response.ok) {
-    let mensaje = 'Error al ejecutar el simulador de firma PKCS#7.';
-    try {
-      const errJson = await response.json();
-      if (errJson.message) mensaje = errJson.message;
-    } catch {}
-    throw new ApiError(response.status, mensaje);
-  }
-
-  const blob = await response.blob();
-  const nombreArchivo = `${numeroCompleto}_v${versionPdf}_FIRMADO.pdf`;
-
-  if (descargarEnPc) {
-    const blobUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = blobUrl;
-    a.download = nombreArchivo;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-  }
-
-  return new File([blob], nombreArchivo, { type: 'application/pdf' });
 }

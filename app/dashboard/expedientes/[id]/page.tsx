@@ -1,7 +1,7 @@
 // Archivo: app/dashboard/expedientes/[id]/page.tsx
 'use client';
 
-import React, { useEffect, useState, FormEvent } from 'react';
+import React, { useEffect, useMemo, useState, FormEvent } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -10,18 +10,31 @@ import {
   Clock,
   Lock,
   FileText,
-  FileCheck2,
+  FileSignature,
   RefreshCw,
-  Edit3,
   RotateCcw,
   UserMinus,
   Loader2,
   Sparkles,
+  AlertTriangle,
+  ExternalLink,
+  ChevronRight,
+  PanelLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { abrirPdfAutenticado, apiFetch, ApiError } from '@/lib/api';
+import {
+  abrirPdfAutenticado,
+  apiFetch,
+  ApiError,
+  obtenerUsuarioSesion,
+  UsuarioSesion,
+} from '@/lib/api';
+import { useSidebar } from '../../sidebar-context';
 
-type TipoAccionFormulario =
+type EstadoExpediente = 'EN_PROCESO' | 'FINALIZADO' | 'ANULADO';
+type EstadoTesista = 'ACTIVO' | 'APTO' | 'DESISTIDO' | 'TITULADO';
+
+type TipoResolucionBackend =
   | 'ASESOR'
   | 'DICTAMEN'
   | 'INSCRIPCION'
@@ -29,23 +42,38 @@ type TipoAccionFormulario =
   | 'APTO'
   | 'FECHA_HORA'
   | 'TITULO'
+  | 'COASESOR'
   | 'CAMBIO_ASESOR'
   | 'CAMBIO_TITULO'
   | 'CAMBIO_DICTAMINANTE'
   | 'DESISTIMIENTO'
-  | 'DSE'
-  | 'CORREGIR_BORRADOR';
+  | 'DSE';
 
-interface DocenteElegible {
-  id: string;
+interface EscuelaCatalogo {
+  id: number;
+  nombre: string;
+  siglasDocumento: string;
+  gradoBachiller: string;
+  tituloProfesional: string;
+  departamentoDefectoId: number;
+  activa: boolean;
+}
+
+interface DepartamentoCatalogo {
+  id: number;
+  nombre: string;
+  activo: boolean;
+}
+
+interface DocenteActivoSelector {
+  docenteId: string;
+  personaId: string;
+  nombreCompleto: string;
   gradoAcademico: string;
-  nombresCompletos: string;
-  nombreParaResolucion: string;
+  correo: string | null;
+  estado: 'ACTIVO' | 'INACTIVO' | 'CESANTE';
   departamentoAcademico: { id: number; nombre: string };
-  escuelaProfesional: { id: number; nombre: string };
-  nivelPrioridad: 1 | 2 | 3;
-  categoriaEmbudo: string;
-  advertenciaInterdisciplinaria: string | null;
+  escuelaProfesional: { id: number; nombre: string; siglasDocumento: string };
 }
 
 interface CausaCatalogo {
@@ -53,47 +81,66 @@ interface CausaCatalogo {
   ambito: 'CAMBIO_ASESOR' | 'CAMBIO_DICTAMINANTE' | 'DSE' | 'DOCUMENTO_EXTERNO';
   descripcion: string;
   requiereDetalleManual: boolean;
+  activo: boolean;
+}
+
+interface PersonaTesistaResumen {
+  id: string;
+  nombres: string;
+  apellidoPaterno: string;
+  apellidoMaterno: string;
+  nombreCompleto: string;
+  codigoUniversitario: string | null;
+  correo: string | null;
+  telefono: string | null;
 }
 
 interface TesistaDetalle {
   id: string;
+  personaId: string;
   orden: number;
-  nombresApellidos: string;
-  codigoEstudiante: string;
-  estado: 'ACTIVO' | 'APTO' | 'DESISTIDO' | 'TITULADO';
+  estado: EstadoTesista;
   aptoResolucionId: string | null;
   tituloResolucionId: string | null;
   notaSustentacion: number | null;
   resultadoSustentacion: string | null;
   fechaSustentacionReal: string | null;
+  persona: PersonaTesistaResumen;
 }
 
 interface ResolucionDetalle {
   id: string;
-  tipo: string;
+  tipo: TipoResolucionBackend;
   serie: 'ORD' | 'CF';
+  numeroCorrelativo: number;
+  anioNumeracion: number;
   numeroCompleto: string;
   tesistaId: string | null;
-  resolucionAntecedenteId: string | null;
+  resolucionAntecedenteId?: string | null;
   situacionJuridica: 'VIGENTE' | 'MODIFICADA' | 'SIN_EFECTO';
   estadoDocumental: 'EMITIDO' | 'FIRMADO';
+  origen: 'SISTEMA' | 'HISTORICO';
   fechaEmision: string;
   nombreDecanoSnapshot: string;
   inicialesOperador: string;
   idTramiteControl: string;
   versionPdf: number;
-  hashVersionGenerado: string;
+  hashVersionGenerado?: string;
+  pdfGeneradoPath: string | null;
   pdfFirmadoPath: string | null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fechaConfirmacionFirma: string | null;
+  creadoEn: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   datosEspecificos: Record<string, any>;
 }
 
-interface FichaExpedienteResponse {
+interface ExpedienteDetalleResponse {
   id: string;
   codigoExpediente: string;
   escuelaProfesionalId: number;
-  estado: 'ACTIVO' | 'TITULADO' | 'ANULADO';
+  estado: EstadoExpediente;
   cantidadTesistas: number;
+  pasoActual: number;
   asesorDocenteId: string | null;
   asesorResolucionId: string | null;
   tituloActual: string | null;
@@ -104,47 +151,51 @@ interface FichaExpedienteResponse {
   dictaminante3Id: string | null;
   dictaminantesResolucionId: string | null;
   inscripcionResolucionId: string | null;
+  libroInscripcionId: string | null;
   fechaHoraResolucionId: string | null;
+  creadoPorId: string;
+  creadoEn: string;
+  actualizadoEn: string;
   escuelaProfesional: {
     id: number;
     nombre: string;
+    siglasDocumento: string;
     gradoBachiller: string;
     tituloProfesional: string;
-    departamentoDefecto: { id: number; nombre: string };
   };
   tesistas: TesistaDetalle[];
   resoluciones: ResolucionDetalle[];
-  asientosLibroInscripcion: Array<{
-    id: string;
-    numeroFolioFormateado: string;
-    estadoAsiento: string;
-  }>;
-  informacionVigenteConsolidada: {
-    gradoBachiller: string;
-    tituloProfesional: string;
-    asesorActual: string | null;
-    tituloActual: string | null;
-    dictaminante1Actual: string | null;
-    dictaminante2Actual: string | null;
-    dictaminante3Actual: string | null;
-    dictaminantesCongeladosPorPaso6: boolean;
-  };
+}
+
+interface CrearResolucionDtoPayload {
+  expedienteId: string;
+  tipo: TipoResolucionBackend;
+  serie?: 'ORD' | 'CF';
+  tesistaId?: string;
+  resolucionAntecedenteId?: string;
+  fechaEmision?: string;
+  datosEspecificos: Record<string, unknown>;
 }
 
 export default function ExpedienteDetallePage() {
   const params = useParams<{ id: string }>();
   const expedienteId = params.id;
+  const { sidebarAbierto, toggleSidebar } = useSidebar();
 
-  const [ficha, setFicha] = useState<FichaExpedienteResponse | null>(null);
-  const [docentesEmbudo, setDocentesEmbudo] = useState<DocenteElegible[]>([]);
+  const [usuario, setUsuario] = useState<UsuarioSesion | null>(null);
+  const [ficha, setFicha] = useState<ExpedienteDetalleResponse | null>(null);
+  const [resoluciones, setResoluciones] = useState<ResolucionDetalle[]>([]);
+  const [docentesActivos, setDocentesActivos] = useState<DocenteActivoSelector[]>([]);
+  const [escuelas, setEscuelas] = useState<EscuelaCatalogo[]>([]);
+  const [departamentos, setDepartamentos] = useState<DepartamentoCatalogo[]>([]);
   const [causas, setCausas] = useState<CausaCatalogo[]>([]);
   const [cargando, setCargando] = useState(true);
   const [procesandoAccion, setProcesandoAccion] = useState(false);
+  const [cambiandoEstado, setCambiandoEstado] = useState(false);
+  const [errorEmision, setErrorEmision] = useState<string | null>(null);
 
   // Acción seleccionada actualmente en el panel derecho
-  const [accionActiva, setAccionActiva] = useState<TipoAccionFormulario | null>(null);
-  const [resolucionBorradorEditar, setResolucionBorradorEditar] =
-    useState<ResolucionDetalle | null>(null);
+  const [accionActiva, setAccionActiva] = useState<TipoResolucionBackend | null>(null);
 
   // Estados de formularios para Pasos 1 al 7 y Complementarias
   const [asesorId, setAsesorId] = useState('');
@@ -181,24 +232,51 @@ export default function ExpedienteDetallePage() {
   const [idsAfectadosDse, setIdsAfectadosDse] = useState<string[]>([]);
   const [reinicioIntegralDse, setReinicioIntegralDse] = useState(false);
 
+  const puedeEmitir =
+    usuario?.rol === 'ADMIN' ||
+    usuario?.rol === 'SECRETARIA_ACADEMICA' ||
+    usuario?.rol === 'ADMINISTRATIVO';
+
+  const puedeCambiarEstado =
+    usuario?.rol === 'ADMIN' || usuario?.rol === 'SECRETARIA_ACADEMICA';
+
   const cargarTodo = async () => {
     setCargando(true);
     try {
-      const dataFicha = await apiFetch<FichaExpedienteResponse>(
-        `/expedientes/${expedienteId}`,
-        { servicio: 'titulacion' },
-      );
-      setFicha(dataFicha);
-
-      const [listaElegibles, listaCausas] = await Promise.all([
-        apiFetch<DocenteElegible[]>(
-          `/docentes/elegibles?escuelaId=${dataFicha.escuelaProfesionalId}&incluirOtrosDepartamentos=true`,
+      const [
+        dataFicha,
+        listaResoluciones,
+        listaDocentes,
+        listaEscuelas,
+        listaDepartamentos,
+        listaCausas,
+      ] = await Promise.all([
+        apiFetch<ExpedienteDetalleResponse>(`/expedientes/${expedienteId}`, {
+          servicio: 'titulacion',
+        }),
+        apiFetch<ResolucionDetalle[]>(
+          `/expedientes/${expedienteId}/resoluciones`,
           { servicio: 'titulacion' },
         ),
-        apiFetch<CausaCatalogo[]>('/catalogos/causas', { servicio: 'titulacion' }),
+        apiFetch<DocenteActivoSelector[]>('/personas/docentes/activos', {
+          servicio: 'titulacion',
+        }),
+        apiFetch<EscuelaCatalogo[]>('/catalogos/escuelas', {
+          servicio: 'titulacion',
+        }),
+        apiFetch<DepartamentoCatalogo[]>('/catalogos/departamentos', {
+          servicio: 'titulacion',
+        }),
+        apiFetch<CausaCatalogo[]>('/catalogos/causas', {
+          servicio: 'titulacion',
+        }),
       ]);
 
-      setDocentesEmbudo(listaElegibles);
+      setFicha(dataFicha);
+      setResoluciones(listaResoluciones);
+      setDocentesActivos(listaDocentes);
+      setEscuelas(listaEscuelas);
+      setDepartamentos(listaDepartamentos);
       setCausas(listaCausas);
     } catch (err) {
       if (err instanceof ApiError) toast.error(err.message);
@@ -208,12 +286,62 @@ export default function ExpedienteDetallePage() {
   };
 
   useEffect(() => {
-    if (expedienteId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      cargarTodo();
-    }
+    const timer = setTimeout(() => {
+      setUsuario(obtenerUsuarioSesion());
+      if (expedienteId) {
+        void cargarTodo();
+      }
+    }, 0);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expedienteId]);
+
+  // Clasificar docentes activos en el embudo de 3 niveles según la Escuela del expediente
+  const escuelaCatalogoActual = useMemo(() => {
+    if (!ficha) return null;
+    return (
+      escuelas.find((e) => e.id === ficha.escuelaProfesionalId) || null
+    );
+  }, [escuelas, ficha]);
+
+  const departamentoDefectoActual = useMemo(() => {
+    if (!escuelaCatalogoActual) return null;
+    return (
+      departamentos.find(
+        (d) => d.id === escuelaCatalogoActual.departamentoDefectoId,
+      ) || null
+    );
+  }, [departamentos, escuelaCatalogoActual]);
+
+  const docentesEmbudo = useMemo(() => {
+    const escId = ficha?.escuelaProfesionalId ?? 0;
+    const depId = escuelaCatalogoActual?.departamentoDefectoId ?? 0;
+    return docentesActivos
+      .map((d) => {
+        let nivelPrioridad: 1 | 2 | 3 = 3;
+        if (d.escuelaProfesional.id === escId) {
+          nivelPrioridad = 1;
+        } else if (depId && d.departamentoAcademico.id === depId) {
+          nivelPrioridad = 2;
+        }
+        return {
+          ...d,
+          nombreParaResolucion: `${d.gradoAcademico} ${d.nombreCompleto}`.trim(),
+          nivelPrioridad,
+        };
+      })
+      .sort((a, b) =>
+        a.nivelPrioridad !== b.nivelPrioridad
+          ? a.nivelPrioridad - b.nivelPrioridad
+          : a.nombreCompleto.localeCompare(b.nombreCompleto),
+      );
+  }, [docentesActivos, ficha, escuelaCatalogoActual]);
+
+  const nombreDocentePorId = (docenteId: string | null | undefined): string => {
+    if (!docenteId) return '';
+    const encontrado = docentesEmbudo.find((d) => d.docenteId === docenteId);
+    return encontrado ? encontrado.nombreParaResolucion : '';
+  };
 
   if (cargando || !ficha) {
     return (
@@ -226,7 +354,7 @@ export default function ExpedienteDetallePage() {
   const tesistasActivos = ficha.tesistas.filter((t) => t.estado !== 'DESISTIDO');
 
   const obtenerResolucionPorId = (resId: string | null) =>
-    resId ? ficha.resoluciones.find((r) => r.id === resId) || null : null;
+    resId ? resoluciones.find((r) => r.id === resId) || null : null;
 
   const estaVigenteYFirmada = (resId: string | null): boolean => {
     const r = obtenerResolucionPorId(resId);
@@ -235,15 +363,60 @@ export default function ExpedienteDetallePage() {
     );
   };
 
+  // Resoluciones VIGENTES todavía pendientes de firma digital (bloquean la emisión de la siguiente resolución en backend)
+  const resolucionesPendientesFirma = resoluciones.filter(
+    (r) =>
+      r.situacionJuridica === 'VIGENTE' && r.estadoDocumental === 'EMITIDO',
+  );
+
+  // Resolver nombres vigentes consolidados desde docentesActivos con respaldo en snapshots de resoluciones
+  const resAsesorObj = obtenerResolucionPorId(ficha.asesorResolucionId);
+  const resDictObj = obtenerResolucionPorId(ficha.dictaminantesResolucionId);
+
+  const asesorActualNombre =
+    nombreDocentePorId(ficha.asesorDocenteId) ||
+    String(
+      resAsesorObj?.datosEspecificos?.asesorNombreCompletoSnapshot ||
+        resAsesorObj?.datosEspecificos?.nombreAsesor ||
+        '',
+    ) ||
+    null;
+
+  const dict1ActualNombre =
+    nombreDocentePorId(ficha.dictaminante1Id) ||
+    String(
+      resDictObj?.datosEspecificos?.dictaminante1Snapshot ||
+        resDictObj?.datosEspecificos?.nombreDictaminante1 ||
+        '',
+    ) ||
+    null;
+
+  const dict2ActualNombre =
+    nombreDocentePorId(ficha.dictaminante2Id) ||
+    String(
+      resDictObj?.datosEspecificos?.dictaminante2Snapshot ||
+        resDictObj?.datosEspecificos?.nombreDictaminante2 ||
+        '',
+    ) ||
+    null;
+
+  const dict3ActualNombre =
+    nombreDocentePorId(ficha.dictaminante3Id) ||
+    String(resDictObj?.datosEspecificos?.dictaminante3Snapshot || '') ||
+    null;
+
+  const dictaminantesCongeladosPorPaso6 = Boolean(ficha.fechaHoraResolucionId);
+  const expedienteEnProceso = ficha.estado === 'EN_PROCESO';
+
   // Evaluación exacta de las 7 etapas secuenciales
   const p1Firmado = estaVigenteYFirmada(ficha.asesorResolucionId);
   const p2Firmado =
     estaVigenteYFirmada(ficha.dictaminantesResolucionId) &&
-    estaVigenteYFirmada(ficha.tituloResolucionId) &&
-    Boolean(ficha.dictaminante1Id);
+    (estaVigenteYFirmada(ficha.tituloResolucionId) || Boolean(ficha.tituloActual)) &&
+    (Boolean(ficha.dictaminante1Id) || Boolean(dict1ActualNombre));
   const p3Firmado = estaVigenteYFirmada(ficha.inscripcionResolucionId);
   const p4Firmado =
-    Boolean(ficha.dictaminante3Id) &&
+    (Boolean(ficha.dictaminante3Id) || Boolean(dict3ActualNombre)) &&
     estaVigenteYFirmada(ficha.dictaminantesResolucionId);
   const todosAptosFirmados =
     tesistasActivos.length > 0 &&
@@ -253,25 +426,30 @@ export default function ExpedienteDetallePage() {
     tesistasActivos.length > 0 &&
     tesistasActivos.every((t) => estaVigenteYFirmada(t.tituloResolucionId));
 
+  const sinFirmaPendiente = resolucionesPendientesFirma.length === 0;
+
   const etapas = [
     {
       numero: 1,
-      tipo: 'ASESOR' as TipoAccionFormulario,
+      tipo: 'ASESOR' as TipoResolucionBackend,
       nombre: '1. Nombramiento de Asesor',
       serie: 'ORD',
       completado: p1Firmado,
-      enEmitido:
-        Boolean(ficha.asesorResolucionId) && !p1Firmado,
-      habilitado: ficha.estado === 'ACTIVO' && !ficha.asesorResolucionId,
+      enEmitido: Boolean(ficha.asesorResolucionId) && !p1Firmado,
+      habilitado:
+        puedeEmitir &&
+        expedienteEnProceso &&
+        !ficha.asesorResolucionId &&
+        sinFirmaPendiente,
       detalleEstado: !ficha.asesorResolucionId
         ? 'Listo para designar Docente Asesor.'
         : p1Firmado
-          ? `Firmado (${ficha.informacionVigenteConsolidada.asesorActual})`
-          : 'Resolución en estado EMITIDO (Confirme su firma para desbloquear el Paso 2).',
+          ? `Firmado (${asesorActualNombre || 'Asesor registrado'})`
+          : 'Resolución en estado EMITIDO — Requiere firma digital en el módulo de Firmas para desbloquear el Paso 2.',
     },
     {
       numero: 2,
-      tipo: 'DICTAMEN' as TipoAccionFormulario,
+      tipo: 'DICTAMEN' as TipoResolucionBackend,
       nombre: '2. Dictamen de Proyecto (Título + 2 Dictaminantes)',
       serie: 'ORD',
       completado: p2Firmado,
@@ -280,46 +458,65 @@ export default function ExpedienteDetallePage() {
         !ficha.dictaminante3Id &&
         !p2Firmado,
       habilitado:
-        ficha.estado === 'ACTIVO' && p1Firmado && !ficha.dictaminante1Id,
+        puedeEmitir &&
+        expedienteEnProceso &&
+        p1Firmado &&
+        !ficha.dictaminante1Id &&
+        !ficha.dictaminantesResolucionId &&
+        sinFirmaPendiente,
       detalleEstado: !p1Firmado
         ? 'Bloqueado: Requiere Paso 1 en estado VIGENTE + FIRMADO.'
         : p2Firmado
           ? 'Proyecto dictaminado y firmado.'
-          : 'Resolución EMITIDA pendiente de firma.',
+          : Boolean(ficha.dictaminantesResolucionId)
+            ? 'Resolución EMITIDA — Pendiente de firma digital PKCS#7.'
+            : 'Listo para registrar Título y designar 2 Dictaminantes.',
     },
     {
       numero: 3,
-      tipo: 'INSCRIPCION' as TipoAccionFormulario,
-      nombre: '3. Inscripción de Proyecto (Asiento en Libro)',
+      tipo: 'INSCRIPCION' as TipoResolucionBackend,
+      nombre: '3. Inscripción de Proyecto',
       serie: 'ORD',
       completado: p3Firmado,
       enEmitido: Boolean(ficha.inscripcionResolucionId) && !p3Firmado,
       habilitado:
-        ficha.estado === 'ACTIVO' && p2Firmado && !ficha.inscripcionResolucionId,
+        puedeEmitir &&
+        expedienteEnProceso &&
+        p2Firmado &&
+        !ficha.inscripcionResolucionId &&
+        sinFirmaPendiente,
       detalleEstado: !p2Firmado
         ? 'Bloqueado: Requiere Paso 2 en estado VIGENTE + FIRMADO.'
         : p3Firmado
-          ? 'Proyecto inscrito en el Libro de la Escuela.'
-          : 'Resolución EMITIDA pendiente de firma.',
+          ? 'Proyecto inscrito y resolución firmada.'
+          : Boolean(ficha.inscripcionResolucionId)
+            ? 'Resolución EMITIDA — Pendiente de firma digital PKCS#7.'
+            : 'Listo para emitir resolución de inscripción del proyecto.',
     },
     {
       numero: 4,
-      tipo: 'TERCER_DICT' as TipoAccionFormulario,
+      tipo: 'TERCER_DICT' as TipoResolucionBackend,
       nombre: '4. Tercer Dictaminante (Obligatorio)',
       serie: 'ORD',
       completado: p4Firmado,
       enEmitido: Boolean(ficha.dictaminante3Id) && !p4Firmado,
       habilitado:
-        ficha.estado === 'ACTIVO' && p3Firmado && !ficha.dictaminante3Id,
+        puedeEmitir &&
+        expedienteEnProceso &&
+        p3Firmado &&
+        !ficha.dictaminante3Id &&
+        sinFirmaPendiente,
       detalleEstado: !p3Firmado
         ? 'Bloqueado: Requiere Paso 3 en estado VIGENTE + FIRMADO.'
         : p4Firmado
-          ? `Terna completa firmada (${ficha.informacionVigenteConsolidada.dictaminante3Actual}).`
-          : 'Resolución EMITIDA pendiente de firma.',
+          ? `Terna completa firmada (${dict3ActualNombre || '3er Dictaminante'}).`
+          : Boolean(ficha.dictaminante3Id)
+            ? 'Resolución EMITIDA — Pendiente de firma digital PKCS#7.'
+            : 'Listo para designar al Tercer Dictaminante.',
     },
     {
       numero: 5,
-      tipo: 'APTO' as TipoAccionFormulario,
+      tipo: 'APTO' as TipoResolucionBackend,
       nombre: '5. Apto para Título Profesional (Individual por Tesista)',
       serie: 'CF',
       completado: todosAptosFirmados,
@@ -327,35 +524,40 @@ export default function ExpedienteDetallePage() {
         tesistasActivos.some((t) => Boolean(t.aptoResolucionId)) &&
         !todosAptosFirmados,
       habilitado:
-        ficha.estado === 'ACTIVO' &&
+        puedeEmitir &&
+        expedienteEnProceso &&
         p4Firmado &&
         tesistasActivos.some((t) => !t.aptoResolucionId),
       detalleEstado: !p4Firmado
         ? 'Bloqueado: Requiere Paso 4 en estado VIGENTE + FIRMADO.'
         : todosAptosFirmados
           ? 'Todos los tesistas activos cuentan con Apto CF firmado.'
-          : 'Pendiente emitir o firmar Apto individual de tesista(s).',
+          : 'Pendiente emitir o firmar digitalmente el Apto individual de tesista(s).',
     },
     {
       numero: 6,
-      tipo: 'FECHA_HORA' as TipoAccionFormulario,
+      tipo: 'FECHA_HORA' as TipoResolucionBackend,
       nombre: '6. Fecha y Hora de Sustentación (Jurado de 4)',
       serie: 'ORD',
       completado: p6Firmado,
       enEmitido: Boolean(ficha.fechaHoraResolucionId) && !p6Firmado,
       habilitado:
-        ficha.estado === 'ACTIVO' &&
+        puedeEmitir &&
+        expedienteEnProceso &&
         todosAptosFirmados &&
-        !ficha.fechaHoraResolucionId,
+        !ficha.fechaHoraResolucionId &&
+        sinFirmaPendiente,
       detalleEstado: !todosAptosFirmados
         ? 'Bloqueado: TODOS los tesistas activos deben tener su Apto VIGENTE + FIRMADO.'
         : p6Firmado
           ? 'Fecha, hora y Jurado firmados (Dictaminantes congelados).'
-          : 'Resolución EMITIDA pendiente de firma.',
+          : Boolean(ficha.fechaHoraResolucionId)
+            ? 'Resolución EMITIDA — Pendiente de firma digital PKCS#7.'
+            : 'Listo para conformar Jurado y programar fecha/hora.',
     },
     {
       numero: 7,
-      tipo: 'TITULO' as TipoAccionFormulario,
+      tipo: 'TITULO' as TipoResolucionBackend,
       nombre: '7. Título Profesional (Calificación 14 a 20)',
       serie: 'CF',
       completado: todosTituladosFirmados,
@@ -363,24 +565,25 @@ export default function ExpedienteDetallePage() {
         tesistasActivos.some((t) => Boolean(t.tituloResolucionId)) &&
         !todosTituladosFirmados,
       habilitado:
-        ficha.estado === 'ACTIVO' &&
+        puedeEmitir &&
+        expedienteEnProceso &&
         p6Firmado &&
         tesistasActivos.some((t) => !t.tituloResolucionId),
       detalleEstado: !p6Firmado
         ? 'Bloqueado: Requiere Paso 6 en estado VIGENTE + FIRMADO.'
         : todosTituladosFirmados
-          ? 'Expediente concluido (TITULADO).'
-          : 'Listo para registrar nota entera (14-20) por tesista.',
+          ? 'Todos los tesistas cuentan con Resolución de Título firmada.'
+          : 'Listo para registrar calificación entera (14-20) por tesista.',
     },
   ];
 
-  // Preparar valores por defecto al abrir un formulario
-  const abrirFormulario = (tipo: TipoAccionFormulario) => {
-    setResolucionBorradorEditar(null);
+  const abrirFormulario = (tipo: TipoResolucionBackend) => {
+    setErrorEmision(null);
+    setDetalleCausaManual('');
     setAccionActiva(tipo);
 
     const disponiblesSinAsesor = docentesEmbudo.filter(
-      (d) => d.id !== ficha.asesorDocenteId,
+      (d) => d.docenteId !== ficha.asesorDocenteId,
     );
     const disponiblesSinTerna = docentesEmbudo.filter(
       (d) =>
@@ -389,18 +592,19 @@ export default function ExpedienteDetallePage() {
           ficha.dictaminante1Id,
           ficha.dictaminante2Id,
           ficha.dictaminante3Id,
-        ].includes(d.id),
+        ].includes(d.docenteId),
     );
 
     if (tipo === 'ASESOR' && docentesEmbudo.length > 0) {
-      setAsesorId(docentesEmbudo[0].id);
+      setAsesorId(docentesEmbudo[0].docenteId);
     }
     if (tipo === 'DICTAMEN' && disponiblesSinAsesor.length >= 2) {
-      setDict1Id(disponiblesSinAsesor[0].id);
-      setDict2Id(disponiblesSinAsesor[1].id);
+      setDict1Id(disponiblesSinAsesor[0].docenteId);
+      setDict2Id(disponiblesSinAsesor[1].docenteId);
+      setTituloProyecto(ficha.tituloActual || '');
     }
     if (tipo === 'TERCER_DICT' && disponiblesSinTerna.length > 0) {
-      setDict3Id(disponiblesSinTerna[0].id);
+      setDict3Id(disponiblesSinTerna[0].docenteId);
     }
     if (tipo === 'APTO') {
       const sinApto = tesistasActivos.find((t) => !t.aptoResolucionId);
@@ -410,15 +614,19 @@ export default function ExpedienteDetallePage() {
       setPresidenteId(ficha.dictaminante1Id || '');
       setSecretarioId(ficha.dictaminante2Id || '');
       setVocalId(ficha.dictaminante3Id || '');
-      const manana = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-      setFechaSustProgramada(manana);
+      const proxSemana = new Date(Date.now() + 7 * 86400000)
+        .toISOString()
+        .slice(0, 10);
+      setFechaSustProgramada(proxSemana);
     }
     if (tipo === 'TITULO') {
       const sinTit = tesistasActivos.find((t) => !t.tituloResolucionId);
       if (sinTit) setTesistaSeleccionadoId(sinTit.id);
     }
     if (tipo === 'CAMBIO_ASESOR') {
-      if (disponiblesSinTerna.length > 0) setAsesorId(disponiblesSinTerna[0].id);
+      if (disponiblesSinTerna.length > 0) {
+        setAsesorId(disponiblesSinTerna[0].docenteId);
+      }
       const c = causas.find((x) => x.ambito === 'CAMBIO_ASESOR');
       if (c) setCausaIdSeleccionada(c.id);
     }
@@ -427,28 +635,35 @@ export default function ExpedienteDetallePage() {
     }
     if (tipo === 'CAMBIO_DICTAMINANTE') {
       setDictSalienteId(ficha.dictaminante3Id || ficha.dictaminante1Id || '');
-      if (disponiblesSinTerna.length > 0) setDictEntranteId(disponiblesSinTerna[0].id);
+      if (disponiblesSinTerna.length > 0) {
+        setDictEntranteId(disponiblesSinTerna[0].docenteId);
+      }
       const c = causas.find((x) => x.ambito === 'CAMBIO_DICTAMINANTE');
       if (c) setCausaIdSeleccionada(c.id);
     }
     if (tipo === 'DESISTIMIENTO') {
-      if (tesistasActivos.length > 0) setTesistaSeleccionadoId(tesistasActivos[0].id);
+      if (tesistasActivos.length > 0) {
+        setTesistaSeleccionadoId(tesistasActivos[0].id);
+      }
     }
     if (tipo === 'DSE') {
-      const vigentes = ficha.resoluciones.filter(
+      const vigentes = resoluciones.filter(
         (r) => r.situacionJuridica === 'VIGENTE' && r.tipo !== 'DSE',
       );
       if (vigentes.length > 0) {
         setIdsAfectadosDse([vigentes[vigentes.length - 1].id]);
+      } else {
+        setIdsAfectadosDse([]);
       }
       const c = causas.find((x) => x.ambito === 'DSE');
       if (c) setCausaIdSeleccionada(c.id);
     }
   };
 
-  // Renderizado del selector de docentes agrupado por el Embudo de 3 Niveles
   const renderOpcionesEmbudo = (excluirIds: Array<string | null | undefined>) => {
-    const filtrados = docentesEmbudo.filter((d) => !excluirIds.includes(d.id));
+    const filtrados = docentesEmbudo.filter(
+      (d) => !excluirIds.includes(d.docenteId),
+    );
     const n1 = filtrados.filter((d) => d.nivelPrioridad === 1);
     const n2 = filtrados.filter((d) => d.nivelPrioridad === 2);
     const n3 = filtrados.filter((d) => d.nivelPrioridad === 3);
@@ -458,8 +673,13 @@ export default function ExpedienteDetallePage() {
         {n1.length > 0 && (
           <optgroup label="★ Nivel 1: Docentes de la misma Escuela Profesional">
             {n1.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.nombreParaResolucion} ({d.escuelaProfesional.nombre.replace('Escuela Profesional de ', '')})
+              <option key={d.docenteId} value={d.docenteId}>
+                {d.nombreParaResolucion} (
+                {d.escuelaProfesional.nombre.replace(
+                  'Escuela Profesional de ',
+                  '',
+                )}
+                )
               </option>
             ))}
           </optgroup>
@@ -467,8 +687,13 @@ export default function ExpedienteDetallePage() {
         {n2.length > 0 && (
           <optgroup label="● Nivel 2: Mismo Departamento Académico">
             {n2.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.nombreParaResolucion} ({d.departamentoAcademico.nombre.replace('Departamento Académico de ', '')})
+              <option key={d.docenteId} value={d.docenteId}>
+                {d.nombreParaResolucion} (
+                {d.departamentoAcademico.nombre.replace(
+                  'Departamento Académico de ',
+                  '',
+                )}
+                )
               </option>
             ))}
           </optgroup>
@@ -476,8 +701,13 @@ export default function ExpedienteDetallePage() {
         {n3.length > 0 && (
           <optgroup label="◆ Nivel 3: Otros Departamentos FCSa (Interdisciplinario)">
             {n3.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.nombreParaResolucion} — [{d.departamentoAcademico.nombre.replace('Departamento Académico de ', '')}]
+              <option key={d.docenteId} value={d.docenteId}>
+                {d.nombreParaResolucion} — [
+                {d.departamentoAcademico.nombre.replace(
+                  'Departamento Académico de ',
+                  '',
+                )}
+                ]
               </option>
             ))}
           </optgroup>
@@ -493,203 +723,350 @@ export default function ExpedienteDetallePage() {
     return 'APROBADO CON DISTINCIÓN Y FELICITACIÓN PÚBLICA';
   };
 
-  // Enviar emisión al backend (Pasos 1-7 o Complementarias)
+  const causaSeleccionadaObj = causas.find(
+    (c) => c.id === Number(causaIdSeleccionada),
+  );
+
+  // Construye y envía POST /resoluciones/emitir con CrearResolucionDto exacto
   const handleEjecutarEmision = async (e: FormEvent) => {
     e.preventDefault();
     if (!accionActiva) return;
 
+    setErrorEmision(null);
+
+    const baseSnapshots: Record<string, unknown> = {
+      escuelaProfesionalSnapshot: ficha.escuelaProfesional.nombre,
+      gradoBachillerSnapshot: ficha.escuelaProfesional.gradoBachiller,
+      tituloProfesionalSnapshot: ficha.escuelaProfesional.tituloProfesional,
+      departamentoAcademico:
+        departamentoDefectoActual?.nombre.replace(
+          'Departamento Académico de ',
+          '',
+        ) || ficha.escuelaProfesional.nombre,
+      tesistasSnapshot: tesistasActivos.map((t) => ({
+        nombresApellidos: t.persona.nombreCompleto,
+        codigoEstudiante: t.persona.codigoUniversitario || '',
+      })),
+    };
+
+    const causaTextoConsolidado = causaSeleccionadaObj
+      ? detalleCausaManual.trim()
+        ? `${causaSeleccionadaObj.descripcion}: ${detalleCausaManual.trim()}`
+        : causaSeleccionadaObj.descripcion
+      : detalleCausaManual.trim();
+
+    const dto: CrearResolucionDtoPayload = {
+      expedienteId: ficha.id,
+      tipo: accionActiva,
+      datosEspecificos: { ...baseSnapshots },
+    };
+
+    if (accionActiva === 'ASESOR') {
+      if (!asesorId) {
+        toast.error('Seleccione un Docente Asesor.');
+        return;
+      }
+      dto.serie = 'ORD';
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        asesorDocenteId: asesorId,
+        asesorNombreCompletoSnapshot: nombreDocentePorId(asesorId),
+      };
+    } else if (accionActiva === 'DICTAMEN') {
+      if (!tituloProyecto.trim() || !dict1Id || !dict2Id || dict1Id === dict2Id) {
+        toast.error(
+          'Ingrese el título del proyecto y seleccione dos dictaminantes distintos.',
+        );
+        return;
+      }
+      dto.serie = 'ORD';
+      if (ficha.asesorResolucionId) {
+        dto.resolucionAntecedenteId = ficha.asesorResolucionId;
+      }
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        tituloTesis: tituloProyecto.trim(),
+        tituloProyecto: tituloProyecto.trim(),
+        tituloVigenteSnapshot: tituloProyecto.trim(),
+        departamentoAcademicoId: escuelaCatalogoActual?.departamentoDefectoId,
+        dictaminante1Id: dict1Id,
+        dictaminante2Id: dict2Id,
+        dictaminante1Snapshot: nombreDocentePorId(dict1Id),
+        dictaminante2Snapshot: nombreDocentePorId(dict2Id),
+      };
+    } else if (accionActiva === 'INSCRIPCION') {
+      dto.serie = 'ORD';
+      if (ficha.dictaminantesResolucionId) {
+        dto.resolucionAntecedenteId = ficha.dictaminantesResolucionId;
+      }
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        tituloInscritoSnapshot: ficha.tituloActual || '',
+        tituloProyecto: ficha.tituloActual || '',
+        resolucionDictamenNumeroSnapshot: resDictObj?.numeroCompleto || '',
+        fechaResolucionDictamenSnapshot: resDictObj?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'TERCER_DICT') {
+      if (!dict3Id) {
+        toast.error('Seleccione el Tercer Dictaminante.');
+        return;
+      }
+      dto.serie = 'ORD';
+      if (ficha.inscripcionResolucionId) {
+        dto.resolucionAntecedenteId = ficha.inscripcionResolucionId;
+      }
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        tituloVigenteSnapshot: ficha.tituloActual || '',
+        dictaminante1Id: ficha.dictaminante1Id,
+        dictaminante2Id: ficha.dictaminante2Id,
+        dictaminante3Id: dict3Id,
+        dictaminante1Snapshot: dict1ActualNombre || '',
+        dictaminante2Snapshot: dict2ActualNombre || '',
+        dictaminante3Snapshot: nombreDocentePorId(dict3Id),
+      };
+    } else if (accionActiva === 'APTO') {
+      const tesistaObj = tesistasActivos.find(
+        (t) => t.id === tesistaSeleccionadoId,
+      );
+      if (!tesistaObj) {
+        toast.error('Seleccione el tesista a declarar Apto.');
+        return;
+      }
+      dto.serie = 'CF';
+      dto.tesistaId = tesistaObj.id;
+      if (ficha.dictaminantesResolucionId) {
+        dto.resolucionAntecedenteId = ficha.dictaminantesResolucionId;
+      }
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        tesistaNombresSnapshot: tesistaObj.persona.nombreCompleto,
+        numeroInformeSecretariaSnapshot: numInformeSec.trim(),
+        fechaInformeSecretariaSnapshot: fechaInformeSec,
+      };
+    } else if (accionActiva === 'FECHA_HORA') {
+      if (
+        !presidenteId ||
+        !secretarioId ||
+        !vocalId ||
+        new Set([presidenteId, secretarioId, vocalId]).size < 3
+      ) {
+        toast.error(
+          'Debe asignar 3 dictaminantes distintos a los cargos de Presidente, Secretario y Vocal.',
+        );
+        return;
+      }
+      dto.serie = 'ORD';
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        tituloVigenteSnapshot: ficha.tituloActual || '',
+        presidenteDocenteId: presidenteId,
+        secretarioDocenteId: secretarioId,
+        vocalDocenteId: vocalId,
+        fechaSustentacion: fechaSustProgramada,
+        horaSustentacion: horaSustProgramada,
+        modalidad: modalidadSust,
+        lugarReferencia: lugarSust.trim(),
+        asesorNombreCompletoSnapshot: asesorActualNombre || '',
+        juradoSnapshot: {
+          presidente: nombreDocentePorId(presidenteId) || dict1ActualNombre || '',
+          secretario: nombreDocentePorId(secretarioId) || dict2ActualNombre || '',
+          dictaminante: nombreDocentePorId(vocalId) || dict3ActualNombre || '',
+          asesor: asesorActualNombre || '',
+        },
+      };
+    } else if (accionActiva === 'TITULO') {
+      const tesistaObj = tesistasActivos.find(
+        (t) => t.id === tesistaSeleccionadoId,
+      );
+      if (!tesistaObj) {
+        toast.error('Seleccione el tesista.');
+        return;
+      }
+      if (notaSust < 14 || notaSust > 20) {
+        toast.error('La nota entera debe estar entre 14 y 20.');
+        return;
+      }
+      dto.serie = 'CF';
+      dto.tesistaId = tesistaObj.id;
+      if (ficha.fechaHoraResolucionId) {
+        dto.resolucionAntecedenteId = ficha.fechaHoraResolucionId;
+      }
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        tesistaNombresSnapshot: tesistaObj.persona.nombreCompleto,
+        notaSustentacion: Number(notaSust),
+        resultadoSustentacion: calcularMencionPreview(Number(notaSust)),
+        fechaSustentacionReal: fechaSustReal,
+      };
+    } else if (accionActiva === 'CAMBIO_ASESOR') {
+      if (!asesorId) {
+        toast.error('Seleccione el nuevo Docente Asesor.');
+        return;
+      }
+      dto.serie = 'ORD';
+      if (ficha.asesorResolucionId) {
+        dto.resolucionAntecedenteId = ficha.asesorResolucionId;
+      }
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        asesorDocenteId: asesorId,
+        asesorNombreCompletoSnapshot: nombreDocentePorId(asesorId),
+        asesorSalienteSnapshot: asesorActualNombre || '',
+        causaId: Number(causaIdSeleccionada) || undefined,
+        causaTextoConsolidadoSnapshot: causaTextoConsolidado,
+        resolucionAntecedenteNumeroSnapshot: resAsesorObj?.numeroCompleto || '',
+        fechaResolucionAntecedenteSnapshot: resAsesorObj?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'CAMBIO_TITULO') {
+      if (!tituloProyecto.trim()) {
+        toast.error('Ingrese el nuevo título de la tesis.');
+        return;
+      }
+      const resTituloPrev =
+        obtenerResolucionPorId(ficha.tituloResolucionId) || resDictObj;
+      dto.serie = 'ORD';
+      if (resTituloPrev) {
+        dto.resolucionAntecedenteId = resTituloPrev.id;
+      }
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        nuevoTitulo: tituloProyecto.trim(),
+        tituloTesis: tituloProyecto.trim(),
+        diceTituloAnterior: ficha.tituloActual || '',
+        debeDecirNuevoTitulo: tituloProyecto.trim(),
+        resolucionAntecedenteNumeroSnapshot: resTituloPrev?.numeroCompleto || '',
+        fechaResolucionAntecedenteSnapshot: resTituloPrev?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'CAMBIO_DICTAMINANTE') {
+      if (!dictSalienteId || !dictEntranteId) {
+        toast.error('Seleccione el dictaminante saliente y el entrante.');
+        return;
+      }
+      dto.serie = 'ORD';
+      if (ficha.dictaminantesResolucionId) {
+        dto.resolucionAntecedenteId = ficha.dictaminantesResolucionId;
+      }
+      const slotActualizado: Record<string, string> = {};
+      if (dictSalienteId === ficha.dictaminante1Id) {
+        slotActualizado.dictaminante1Id = dictEntranteId;
+      } else if (dictSalienteId === ficha.dictaminante2Id) {
+        slotActualizado.dictaminante2Id = dictEntranteId;
+      } else if (dictSalienteId === ficha.dictaminante3Id) {
+        slotActualizado.dictaminante3Id = dictEntranteId;
+      }
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        ...slotActualizado,
+        dictaminanteSalienteId: dictSalienteId,
+        dictaminanteEntranteId: dictEntranteId,
+        dictaminanteSalienteSnapshot: nombreDocentePorId(dictSalienteId),
+        dictaminanteEntranteSnapshot: nombreDocentePorId(dictEntranteId),
+        causaId: Number(causaIdSeleccionada) || undefined,
+        causaTextoConsolidadoSnapshot: causaTextoConsolidado,
+        tituloVigenteSnapshot: ficha.tituloActual || '',
+        resolucionAntecedenteNumeroSnapshot: resDictObj?.numeroCompleto || '',
+        fechaResolucionAntecedente: resDictObj?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'DESISTIMIENTO') {
+      const desistente = tesistasActivos.find(
+        (t) => t.id === tesistaSeleccionadoId,
+      );
+      if (!desistente) {
+        toast.error('Seleccione el tesista desistente.');
+        return;
+      }
+      const continua = tesistasActivos.find((t) => t.id !== desistente.id);
+      dto.serie = 'ORD';
+      dto.tesistaId = desistente.id;
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        tesistaDesistenteId: desistente.id,
+        tesistaDesistenteNombresSnapshot: desistente.persona.nombreCompleto,
+        tesistaContinuaNombresSnapshot: continua?.persona.nombreCompleto || '',
+        referenciaSolicitudExterna: refSolicitudDesistimiento.trim(),
+        ...(fundamentoDesistimiento.trim()
+          ? { fundamentoSolicitud: fundamentoDesistimiento.trim() }
+          : {}),
+        resolucionAsesorNumeroSnapshot: resAsesorObj?.numeroCompleto || '',
+        fechaResolucionAsesorSnapshot: resAsesorObj?.fechaEmision || '',
+        resolucionDictamenNumeroSnapshot: resDictObj?.numeroCompleto || '',
+        fechaResolucionDictamenSnapshot: resDictObj?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'DSE') {
+      if (idsAfectadosDse.length === 0) {
+        toast.error('Seleccione al menos una resolución vigente a dejar sin efecto.');
+        return;
+      }
+      const afectadasObjs = resoluciones.filter((r) =>
+        idsAfectadosDse.includes(r.id),
+      );
+      dto.serie = serieDse;
+      dto.datosEspecificos = {
+        ...baseSnapshots,
+        resolucionesAfectadasIds: idsAfectadosDse,
+        resolucionesAfectadasSnapshot: afectadasObjs.map((r) => ({
+          numeroCompleto: r.numeroCompleto,
+          fechaEmision: r.fechaEmision,
+          tipo: r.tipo,
+        })),
+        causaId: Number(causaIdSeleccionada) || undefined,
+        causaTextoConsolidadoSnapshot: causaTextoConsolidado,
+        reinicioIntegral: reinicioIntegralDse,
+      };
+    }
+
     setProcesandoAccion(true);
     try {
-      if (accionActiva === 'CORREGIR_BORRADOR' && resolucionBorradorEditar) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const bodyPatch: Record<string, any> = {};
-        if (resolucionBorradorEditar.tipo === 'DICTAMEN') {
-          bodyPatch.tituloProyecto = tituloProyecto;
-        } else if (resolucionBorradorEditar.tipo === 'APTO') {
-          bodyPatch.numeroInformeSecretaria = numInformeSec;
-        } else if (resolucionBorradorEditar.tipo === 'FECHA_HORA') {
-          bodyPatch.horaSustentacion = horaSustProgramada;
-          bodyPatch.lugarReferencia = lugarSust;
-        } else if (resolucionBorradorEditar.tipo === 'TITULO') {
-          bodyPatch.notaSustentacion = Number(notaSust);
-        }
+      const creada = await apiFetch<ResolucionDetalle>('/resoluciones/emitir', {
+        servicio: 'titulacion',
+        method: 'POST',
+        body: JSON.stringify(dto),
+      });
 
-        const reg = await apiFetch<ResolucionDetalle>(
-          `/resoluciones/${resolucionBorradorEditar.id}/corregir-borrador-emitido`,
-          {
-            servicio: 'titulacion',
-            method: 'PATCH',
-            body: JSON.stringify(bodyPatch),
-          },
-        );
-        toast.success(
-          `Borrador ${reg.numeroCompleto} actualizado a v${reg.versionPdf} (Nuevo Hash: ${reg.hashVersionGenerado}).`,
-        );
-      } else if (
-        [
-          'ASESOR',
-          'DICTAMEN',
-          'INSCRIPCION',
-          'TERCER_DICT',
-          'APTO',
-          'FECHA_HORA',
-          'TITULO',
-        ].includes(accionActiva)
-      ) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let payload: Record<string, any> = {};
-        if (accionActiva === 'ASESOR') {
-          payload = { asesorDocenteId: asesorId };
-        } else if (accionActiva === 'DICTAMEN') {
-          payload = {
-            tituloProyecto,
-            departamentoAcademicoId:
-              ficha.escuelaProfesional.departamentoDefecto.id,
-            dictaminante1Id: dict1Id,
-            dictaminante2Id: dict2Id,
-          };
-        } else if (accionActiva === 'INSCRIPCION') {
-          payload = {};
-        } else if (accionActiva === 'TERCER_DICT') {
-          payload = { dictaminante3Id: dict3Id };
-        } else if (accionActiva === 'APTO') {
-          payload = {
-            tesistaId: tesistaSeleccionadoId,
-            numeroInformeSecretaria: numInformeSec,
-            fechaInformeSecretaria: fechaInformeSec,
-          };
-        } else if (accionActiva === 'FECHA_HORA') {
-          payload = {
-            presidenteDocenteId: presidenteId,
-            secretarioDocenteId: secretarioId,
-            vocalDocenteId: vocalId,
-            fechaSustentacion: fechaSustProgramada,
-            horaSustentacion: horaSustProgramada,
-            modalidad: modalidadSust,
-            lugarReferencia: lugarSust,
-          };
-        } else if (accionActiva === 'TITULO') {
-          payload = {
-            tesistaId: tesistaSeleccionadoId,
-            notaSustentacion: Number(notaSust),
-            fechaSustentacionReal: fechaSustReal,
-          };
-        }
-
-        const creada = await apiFetch<ResolucionDetalle>(
-          `/expedientes/${ficha.id}/pasos/${accionActiva}`,
-          {
-            servicio: 'titulacion',
-            method: 'POST',
-            body: JSON.stringify(payload),
-          },
-        );
-        toast.success(
-          `Resolución ${creada.numeroCompleto} emitida con éxito (Estado: EMITIDO).`,
-        );
-      } else if (accionActiva === 'CAMBIO_ASESOR') {
-        const res = await apiFetch<ResolucionDetalle>(
-          `/expedientes/${ficha.id}/complementarias/cambio-asesor`,
-          {
-            servicio: 'titulacion',
-            method: 'POST',
-            body: JSON.stringify({
-              nuevoAsesorDocenteId: asesorId,
-              causaId: Number(causaIdSeleccionada),
-              ...(detalleCausaManual.trim()
-                ? { detalleCausaManual: detalleCausaManual.trim() }
-                : {}),
-            }),
-          },
-        );
-        toast.success(`Cambio de Asesor ${res.numeroCompleto} emitido.`);
-      } else if (accionActiva === 'CAMBIO_TITULO') {
-        const res = await apiFetch<ResolucionDetalle>(
-          `/expedientes/${ficha.id}/complementarias/cambio-titulo`,
-          {
-            servicio: 'titulacion',
-            method: 'POST',
-            body: JSON.stringify({ nuevoTitulo: tituloProyecto }),
-          },
-        );
-        toast.success(`Cambio de Título ${res.numeroCompleto} emitido.`);
-      } else if (accionActiva === 'CAMBIO_DICTAMINANTE') {
-        const res = await apiFetch<ResolucionDetalle>(
-          `/expedientes/${ficha.id}/complementarias/cambio-dictaminante`,
-          {
-            servicio: 'titulacion',
-            method: 'POST',
-            body: JSON.stringify({
-              dictaminanteSalienteId: dictSalienteId,
-              dictaminanteEntranteId: dictEntranteId,
-              causaId: Number(causaIdSeleccionada),
-              ...(detalleCausaManual.trim()
-                ? { detalleCausaManual: detalleCausaManual.trim() }
-                : {}),
-            }),
-          },
-        );
-        toast.success(`Cambio de Dictaminante ${res.numeroCompleto} emitido.`);
-      } else if (accionActiva === 'DESISTIMIENTO') {
-        const res = await apiFetch<ResolucionDetalle>(
-          `/expedientes/${ficha.id}/complementarias/desistimiento`,
-          {
-            servicio: 'titulacion',
-            method: 'POST',
-            body: JSON.stringify({
-              tesistaDesistenteId: tesistaSeleccionadoId,
-              referenciaSolicitudExterna: refSolicitudDesistimiento,
-              ...(fundamentoDesistimiento.trim()
-                ? { fundamentoSolicitud: fundamentoDesistimiento.trim() }
-                : {}),
-            }),
-          },
-        );
-        toast.success(`Desistimiento ${res.numeroCompleto} emitido.`);
-      } else if (accionActiva === 'DSE') {
-        const res = await apiFetch<ResolucionDetalle>(
-          `/expedientes/${ficha.id}/complementarias/dse`,
-          {
-            servicio: 'titulacion',
-            method: 'POST',
-            body: JSON.stringify({
-              serie: serieDse,
-              resolucionesAfectadasIds: idsAfectadosDse,
-              causaId: Number(causaIdSeleccionada),
-              reinicioIntegral: reinicioIntegralDse,
-              ...(detalleCausaManual.trim()
-                ? { detalleCausaManual: detalleCausaManual.trim() }
-                : {}),
-            }),
-          },
-        );
-        toast.success(
-          `Resolución DSE ${res.numeroCompleto} emitida. Punteros del expediente recalculados.`,
-        );
-      }
-
+      toast.success(
+        `Resolución ${creada.numeroCompleto} emitida con éxito (Estado: EMITIDO).`,
+        {
+          description:
+            'Diríjase al módulo de Firma Digital para firmar y validar el documento antes del siguiente paso.',
+        },
+      );
       setAccionActiva(null);
+      setErrorEmision(null);
       await cargarTodo();
     } catch (err) {
-      if (err instanceof ApiError) toast.error(err.message);
-      else toast.error('Ocurrió un error al procesar la resolución.');
+      const msg =
+        err instanceof ApiError
+          ? err.message
+          : 'Ocurrió un error al emitir la resolución.';
+      setErrorEmision(msg);
+      toast.error(msg);
     } finally {
       setProcesandoAccion(false);
     }
   };
 
-  const handleConfirmarFirma = async (res: ResolucionDetalle) => {
+  const handleCambiarEstadoExpediente = async (nuevoEstado: EstadoExpediente) => {
+    if (nuevoEstado === ficha.estado) return;
+    setCambiandoEstado(true);
     try {
-      await apiFetch(`/resoluciones/${res.id}/confirmar-firma`, {
-        servicio: 'titulacion',
-        method: 'PATCH',
-      });
+      await apiFetch<ExpedienteDetalleResponse>(
+        `/expedientes/${ficha.id}/estado`,
+        {
+          servicio: 'titulacion',
+          method: 'PATCH',
+          body: JSON.stringify({ estado: nuevoEstado }),
+        },
+      );
       toast.success(
-        `Firma confirmada: ${res.numeroCompleto} pasó a estado FIRMADO e inmutable.`,
+        `Estado del expediente actualizado a ${nuevoEstado.replace('_', ' ')}.`,
       );
       await cargarTodo();
     } catch (err) {
       if (err instanceof ApiError) toast.error(err.message);
+      else toast.error('No se pudo actualizar el estado del expediente.');
+    } finally {
+      setCambiandoEstado(false);
     }
   };
 
@@ -708,26 +1085,48 @@ export default function ExpedienteDetallePage() {
   const ternaVigentesOpciones = [
     {
       id: ficha.dictaminante1Id || '',
-      nombre: ficha.informacionVigenteConsolidada.dictaminante1Actual || 'Dictaminante 1',
+      nombre: dict1ActualNombre || 'Dictaminante 1',
     },
     {
       id: ficha.dictaminante2Id || '',
-      nombre: ficha.informacionVigenteConsolidada.dictaminante2Actual || 'Dictaminante 2',
+      nombre: dict2ActualNombre || 'Dictaminante 2',
     },
     {
       id: ficha.dictaminante3Id || '',
-      nombre: ficha.informacionVigenteConsolidada.dictaminante3Actual || 'Dictaminante 3',
+      nombre: dict3ActualNombre || 'Dictaminante 3',
     },
   ].filter((x) => Boolean(x.id));
 
-  const causaSeleccionadaObj = causas.find(
-    (c) => c.id === Number(causaIdSeleccionada),
-  );
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-12 w-full">
+      {/* Breadcrumbs y Botón de Sidebar */}
+      <nav className="flex items-center text-sm text-gray-500">
+        <button
+          type="button"
+          className="hidden lg:flex p-1.5 mr-3 rounded-md text-gray-500 hover:bg-gray-200 transition-colors"
+          title={sidebarAbierto ? 'Ocultar menú' : 'Mostrar menú'}
+          onClick={toggleSidebar}
+        >
+          <PanelLeft className="w-4 h-4" />
+        </button>
+        <Link href="/dashboard" className="hover:text-gray-900 transition-colors">
+          Inicio
+        </Link>
+        <ChevronRight className="w-4 h-4 mx-1 text-gray-400" />
+        <Link
+          href="/dashboard/expedientes"
+          className="hover:text-gray-900 transition-colors"
+        >
+          Expedientes y 7 Pasos
+        </Link>
+        <ChevronRight className="w-4 h-4 mx-1 text-gray-400" />
+        <span className="font-mono font-medium text-gray-800">
+          {ficha.codigoExpediente}
+        </span>
+      </nav>
+
       {/* Barra Superior de Regreso y Estado General */}
-      <div className="flex flex-wrap items-center justify-between gap-4 bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-4 bg-white rounded-2xl border border-gray-200 p-5 shadow-sm">
         <div className="flex items-center gap-3">
           <Link
             href="/dashboard/expedientes"
@@ -736,12 +1135,15 @@ export default function ExpedienteDetallePage() {
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <div>
-            <div className="flex items-center gap-2.5">
-              <span className="font-mono text-base font-extrabold text-[#0B2B5A]">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <span className="font-mono text-base font-extrabold text-[#1E73BE]">
                 {ficha.codigoExpediente}
               </span>
               <span className="text-xs font-semibold text-gray-600 bg-gray-100 px-2.5 py-0.5 rounded">
                 {ficha.escuelaProfesional.nombre}
+              </span>
+              <span className="text-[11px] font-bold text-[#1E73BE] bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
+                Paso actual: {ficha.pasoActual}
               </span>
             </div>
             <p className="text-xs text-gray-500 mt-0.5">
@@ -752,26 +1154,81 @@ export default function ExpedienteDetallePage() {
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
-          {ficha.informacionVigenteConsolidada.dictaminantesCongeladosPorPaso6 && (
+          {dictaminantesCongeladosPorPaso6 && (
             <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
               <Lock className="w-3.5 h-3.5" />
               <span>Dictaminantes Congelados (Paso 6 Vigente)</span>
             </span>
           )}
 
-          <span
-            className={`px-3.5 py-1 rounded-full text-xs font-extrabold ${
-              ficha.estado === 'ACTIVO'
-                ? 'bg-blue-100 text-blue-800'
-                : ficha.estado === 'TITULADO'
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : 'bg-rose-100 text-rose-800'
-            }`}
-          >
-            EXPEDIENTE: {ficha.estado}
-          </span>
+          {puedeCambiarEstado ? (
+            <select
+              value={ficha.estado}
+              disabled={cambiandoEstado}
+              onChange={(e) =>
+                void handleCambiarEstadoExpediente(
+                  e.target.value as EstadoExpediente,
+                )
+              }
+              className={`px-3 py-1.5 rounded-full text-xs font-extrabold border cursor-pointer focus:outline-none ${
+                ficha.estado === 'EN_PROCESO'
+                  ? 'bg-blue-100 text-blue-800 border-blue-200'
+                  : ficha.estado === 'FINALIZADO'
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                    : 'bg-rose-100 text-rose-800 border-rose-200'
+              }`}
+            >
+              <option value="EN_PROCESO">EXPEDIENTE: EN PROCESO</option>
+              <option value="FINALIZADO">EXPEDIENTE: FINALIZADO</option>
+              <option value="ANULADO">EXPEDIENTE: ANULADO</option>
+            </select>
+          ) : (
+            <span
+              className={`px-3.5 py-1 rounded-full text-xs font-extrabold ${
+                ficha.estado === 'EN_PROCESO'
+                  ? 'bg-blue-100 text-blue-800'
+                  : ficha.estado === 'FINALIZADO'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-rose-100 text-rose-800'
+              }`}
+            >
+              EXPEDIENTE: {ficha.estado.replace('_', ' ')}
+            </span>
+          )}
         </div>
       </div>
+
+      {/* Aviso Destacado si existe Resolución EMITIDA pendiente de Firma Digital */}
+      {resolucionesPendientesFirma.length > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 shadow-xs flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-950 space-y-1">
+              <p className="font-bold">
+                Firma digital PKCS#7 pendiente — Avance de pasos bloqueado por seguridad jurídica
+              </p>
+              <p className="text-amber-900">
+                La(s) resolución(es){' '}
+                <span className="font-mono font-bold">
+                  {resolucionesPendientesFirma
+                    .map((r) => r.numeroCompleto)
+                    .join(', ')}
+                </span>{' '}
+                se encuentra(n) en estado <b>EMITIDO</b>. Debe descargar el PDF, firmarlo digitalmente (ReFirma/Tocapu) y validarlo criptográficamente en el módulo de Firmas antes de emitir la siguiente resolución.
+              </p>
+            </div>
+          </div>
+
+          <Link
+            href="/dashboard/firmas"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#1E73BE] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#175B96] transition shrink-0"
+          >
+            <FileSignature className="w-4 h-4" />
+            <span>Ir a Firma Digital</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+      )}
 
       {/* =================================================================== */}
       {/* GRILLA PRINCIPAL: IZQUIERDA (7 PASOS + DATOS) | DERECHA (FORMULARIO)*/}
@@ -780,15 +1237,14 @@ export default function ExpedienteDetallePage() {
         {/* COLUMNA IZQUIERDA (7 Columnas) */}
         <div className="xl:col-span-7 space-y-6">
           {/* 1. Punteros Consolidados Vigentes del Expediente */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm space-y-4">
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-4">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
               <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
                 Información Vigente Consolidada del Expediente
               </h3>
-              {ficha.asientosLibroInscripcion[0] && (
-                <span className="font-mono text-xs font-bold bg-blue-50 text-[#0B2B5A] px-2.5 py-1 rounded border border-blue-200">
-                  Folio Libro: {ficha.asientosLibroInscripcion[0].numeroFolioFormateado} (
-                  {ficha.asientosLibroInscripcion[0].estadoAsiento})
+              {ficha.libroInscripcionId && (
+                <span className="font-mono text-xs font-bold bg-blue-50 text-[#1E73BE] px-2.5 py-1 rounded border border-blue-200">
+                  Inscrito en Libro Oficial
                 </span>
               )}
             </div>
@@ -809,7 +1265,7 @@ export default function ExpedienteDetallePage() {
                   Docente Asesor Vigente:
                 </span>
                 <span className="font-bold text-gray-900">
-                  {ficha.informacionVigenteConsolidada.asesorActual || 'Sin designar'}
+                  {asesorActualNombre || 'Sin designar'}
                 </span>
               </div>
               <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
@@ -817,15 +1273,9 @@ export default function ExpedienteDetallePage() {
                   Terna de Dictaminantes Vigente:
                 </span>
                 <div className="font-semibold text-gray-800 space-y-0.5 mt-0.5">
-                  <p>
-                    1. {ficha.informacionVigenteConsolidada.dictaminante1Actual || '—'}
-                  </p>
-                  <p>
-                    2. {ficha.informacionVigenteConsolidada.dictaminante2Actual || '—'}
-                  </p>
-                  <p>
-                    3. {ficha.informacionVigenteConsolidada.dictaminante3Actual || '—'}
-                  </p>
+                  <p>1. {dict1ActualNombre || '—'}</p>
+                  <p>2. {dict2ActualNombre || '—'}</p>
+                  <p>3. {dict3ActualNombre || '—'}</p>
                 </div>
               </div>
             </div>
@@ -850,12 +1300,23 @@ export default function ExpedienteDetallePage() {
                     {ficha.tesistas.map((t) => {
                       const rApto = obtenerResolucionPorId(t.aptoResolucionId);
                       const rTit = obtenerResolucionPorId(t.tituloResolucionId);
+                      const notaMostrar =
+                        t.notaSustentacion ??
+                        rTit?.datosEspecificos?.notaSustentacion ??
+                        null;
+                      const resMostrar =
+                        t.resultadoSustentacion ??
+                        rTit?.datosEspecificos?.resultadoSustentacion ??
+                        null;
+
                       return (
                         <tr key={t.id}>
                           <td className="py-2 font-bold text-gray-900">
-                            {t.nombresApellidos}
+                            {t.persona.nombreCompleto}
                           </td>
-                          <td className="py-2 font-mono">{t.codigoEstudiante}</td>
+                          <td className="py-2 font-mono">
+                            {t.persona.codigoUniversitario || '—'}
+                          </td>
                           <td className="py-2">
                             <span
                               className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -878,7 +1339,7 @@ export default function ExpedienteDetallePage() {
                           </td>
                           <td className="py-2 font-mono text-[11px]">
                             {rTit
-                              ? `${rTit.numeroCompleto} [Nota: ${t.notaSustentacion} - ${t.resultadoSustentacion}] (${rTit.estadoDocumental})`
+                              ? `${rTit.numeroCompleto}${notaMostrar !== null ? ` [Nota: ${notaMostrar}${resMostrar ? ` - ${resMostrar}` : ''}]` : ''} (${rTit.estadoDocumental})`
                               : 'Pendiente'}
                           </td>
                         </tr>
@@ -890,70 +1351,72 @@ export default function ExpedienteDetallePage() {
             </div>
 
             {/* Botonera de Resoluciones Complementarias y Excepciones */}
-            <div className="pt-3 border-t border-gray-100 flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-bold uppercase text-gray-500 mr-1">
-                Complementarias:
-              </span>
-              <button
-                type="button"
-                onClick={() => abrirFormulario('CAMBIO_ASESOR')}
-                disabled={!p1Firmado || ficha.estado !== 'ACTIVO'}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-800 disabled:opacity-40"
-              >
-                Cambio de Asesor
-              </button>
-              <button
-                type="button"
-                onClick={() => abrirFormulario('CAMBIO_TITULO')}
-                disabled={!p2Firmado || ficha.estado !== 'ACTIVO'}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-800 disabled:opacity-40"
-              >
-                Cambio de Título (DICE/DEBE DECIR)
-              </button>
-              <button
-                type="button"
-                onClick={() => abrirFormulario('CAMBIO_DICTAMINANTE')}
-                disabled={
-                  !p4Firmado ||
-                  Boolean(ficha.fechaHoraResolucionId) ||
-                  ficha.estado !== 'ACTIVO'
-                }
-                title={
-                  ficha.fechaHoraResolucionId
-                    ? 'Bloqueado por RN-CD-20: Los dictaminantes están congelados en Paso 6'
-                    : ''
-                }
-                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-800 disabled:opacity-40"
-              >
-                Cambio de Dictaminante
-              </button>
-              <button
-                type="button"
-                onClick={() => abrirFormulario('DESISTIMIENTO')}
-                disabled={
-                  tesistasActivos.length !== 2 ||
-                  Boolean(ficha.fechaHoraResolucionId) ||
-                  ficha.estado !== 'ACTIVO'
-                }
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-100 hover:bg-amber-200 text-amber-900 disabled:opacity-40"
-              >
-                <UserMinus className="w-3.5 h-3.5" />
-                <span>Desistimiento</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => abrirFormulario('DSE')}
-                disabled={ficha.resoluciones.length === 0}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-100 hover:bg-rose-200 text-rose-900 disabled:opacity-40"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Dejar Sin Efecto (DSE)</span>
-              </button>
-            </div>
+            {puedeEmitir && (
+              <div className="pt-3 border-t border-gray-100 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-bold uppercase text-gray-500 mr-1">
+                  Complementarias:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => abrirFormulario('CAMBIO_ASESOR')}
+                  disabled={!p1Firmado || !expedienteEnProceso}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-800 disabled:opacity-40"
+                >
+                  Cambio de Asesor
+                </button>
+                <button
+                  type="button"
+                  onClick={() => abrirFormulario('CAMBIO_TITULO')}
+                  disabled={!p2Firmado || !expedienteEnProceso}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-800 disabled:opacity-40"
+                >
+                  Cambio de Título (DICE/DEBE DECIR)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => abrirFormulario('CAMBIO_DICTAMINANTE')}
+                  disabled={
+                    !p4Firmado ||
+                    dictaminantesCongeladosPorPaso6 ||
+                    !expedienteEnProceso
+                  }
+                  title={
+                    dictaminantesCongeladosPorPaso6
+                      ? 'Bloqueado: Los dictaminantes están congelados en Paso 6'
+                      : ''
+                  }
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-800 disabled:opacity-40"
+                >
+                  Cambio de Dictaminante
+                </button>
+                <button
+                  type="button"
+                  onClick={() => abrirFormulario('DESISTIMIENTO')}
+                  disabled={
+                    tesistasActivos.length !== 2 ||
+                    dictaminantesCongeladosPorPaso6 ||
+                    !expedienteEnProceso
+                  }
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-100 hover:bg-amber-200 text-amber-900 disabled:opacity-40"
+                >
+                  <UserMinus className="w-3.5 h-3.5" />
+                  <span>Desistimiento</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => abrirFormulario('DSE')}
+                  disabled={resoluciones.length === 0 || !expedienteEnProceso}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-100 hover:bg-rose-200 text-rose-900 disabled:opacity-40"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Dejar Sin Efecto (DSE)</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 2. Flujo Secuencial de los 7 Pasos */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm space-y-3">
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
               Flujo Secuencial Obligatorio (7 Pasos de Titulación)
             </h3>
@@ -980,7 +1443,7 @@ export default function ExpedienteDetallePage() {
                           : etapa.enEmitido
                             ? 'bg-amber-500 text-white'
                             : etapa.habilitado
-                              ? 'bg-[#0B2B5A] text-white'
+                              ? 'bg-[#1E73BE] text-white'
                               : 'bg-gray-300 text-gray-700'
                       }`}
                     >
@@ -1013,14 +1476,24 @@ export default function ExpedienteDetallePage() {
                     </div>
                   </div>
 
-                  {etapa.habilitado && (
-                    <button
-                      type="button"
-                      onClick={() => abrirFormulario(etapa.tipo)}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#0B2B5A] hover:bg-[#082044] text-white text-xs font-bold shadow-xs transition"
+                  {etapa.enEmitido ? (
+                    <Link
+                      href="/dashboard/firmas"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs transition"
                     >
-                      Preparar Paso {etapa.numero}
-                    </button>
+                      <FileSignature className="w-3.5 h-3.5" />
+                      <span>Firmar en Firmas</span>
+                    </Link>
+                  ) : (
+                    etapa.habilitado && (
+                      <button
+                        type="button"
+                        onClick={() => abrirFormulario(etapa.tipo)}
+                        className="px-3.5 py-1.5 rounded-lg bg-[#1E73BE] hover:bg-[#175B96] text-white text-xs font-bold shadow-xs transition"
+                      >
+                        Preparar Paso {etapa.numero}
+                      </button>
+                    )
                   )}
                 </div>
               ))}
@@ -1032,10 +1505,10 @@ export default function ExpedienteDetallePage() {
         {/* COLUMNA DERECHA (5 Columnas): PANEL DE EMISIÓN Y FORMULARIO ACTIVO  */}
         {/* =================================================================== */}
         <div className="xl:col-span-5 space-y-6">
-          <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm sticky top-20">
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm sticky top-20">
             {!accionActiva ? (
               <div className="py-12 text-center space-y-2">
-                <Sparkles className="w-8 h-8 text-[#0B2B5A] mx-auto opacity-70" />
+                <Sparkles className="w-8 h-8 text-[#1E73BE] mx-auto opacity-70" />
                 <h3 className="text-sm font-bold text-gray-900">
                   Asistente de Emisión de Resoluciones
                 </h3>
@@ -1046,19 +1519,41 @@ export default function ExpedienteDetallePage() {
             ) : (
               <form onSubmit={handleEjecutarEmision} className="space-y-4 text-xs">
                 <div className="flex items-center justify-between border-b border-gray-200 pb-3">
-                  <h3 className="text-sm font-bold text-[#0B2B5A]">
-                    {accionActiva === 'CORREGIR_BORRADOR'
-                      ? `Corregir Borrador EMITIDO (${resolucionBorradorEditar?.numeroCompleto})`
-                      : `Formulario de Emisión: ${accionActiva}`}
+                  <h3 className="text-sm font-bold text-[#1E73BE]">
+                    Formulario de Emisión: {accionActiva.replace('_', ' ')}
                   </h3>
                   <button
                     type="button"
-                    onClick={() => setAccionActiva(null)}
+                    onClick={() => {
+                      setAccionActiva(null);
+                      setErrorEmision(null);
+                    }}
                     className="text-gray-400 hover:text-gray-600 text-xs font-bold"
                   >
                     ✕ Cerrar
                   </button>
                 </div>
+
+                {/* Mensaje de error del backend (ej. bloqueo por firma digital pendiente) */}
+                {errorEmision && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <p className="font-semibold text-[11px] leading-relaxed">
+                        {errorEmision}
+                      </p>
+                    </div>
+                    {errorEmision.toLowerCase().includes('firma') && (
+                      <Link
+                        href="/dashboard/firmas"
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1E73BE] hover:underline"
+                      >
+                        <FileSignature className="w-3.5 h-3.5" />
+                        <span>Ir al módulo de Firma Digital y Validación</span>
+                      </Link>
+                    )}
+                  </div>
+                )}
 
                 {/* PASO 1: NOMBRAMIENTO DE ASESOR */}
                 {accionActiva === 'ASESOR' && (
@@ -1122,14 +1617,14 @@ export default function ExpedienteDetallePage() {
                 {/* PASO 3: INSCRIPCIÓN DE PROYECTO */}
                 {accionActiva === 'INSCRIPCION' && (
                   <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 space-y-1.5">
-                    <p className="font-bold text-[#0B2B5A]">
-                      Generación Automática de Asiento en Libro de Inscripción
+                    <p className="font-bold text-[#1E73BE]">
+                      Emisión de Resolución de Inscripción de Proyecto
                     </p>
                     <p className="text-gray-700">
                       <b>Título a inscribir:</b> {ficha.tituloActual}
                     </p>
                     <p className="text-[11px] text-gray-600">
-                      Al confirmar, el sistema asignará un número ORD y creará el folio correlativo anual en el Libro de Inscripción de la{' '}
+                      Al confirmar, el sistema asignará un número correlativo ORD para la{' '}
                       <b>{ficha.escuelaProfesional.nombre}</b>.
                     </p>
                   </div>
@@ -1164,14 +1659,17 @@ export default function ExpedienteDetallePage() {
                       </label>
                       <select
                         value={tesistaSeleccionadoId}
-                        onChange={(e) => setTesistaSeleccionadoId(e.target.value)}
+                        onChange={(e) =>
+                          setTesistaSeleccionadoId(e.target.value)
+                        }
                         className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
                       >
                         {tesistasActivos
                           .filter((t) => !t.aptoResolucionId)
                           .map((t) => (
                             <option key={t.id} value={t.id}>
-                              {t.nombresApellidos} ({t.codigoEstudiante})
+                              {t.persona.nombreCompleto} (
+                              {t.persona.codigoUniversitario || 'S/C'})
                             </option>
                           ))}
                       </select>
@@ -1207,7 +1705,8 @@ export default function ExpedienteDetallePage() {
                 {accionActiva === 'FECHA_HORA' && (
                   <div className="space-y-3">
                     <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
-                      Distribuya los 3 Dictaminantes vigentes en los cargos de Presidente, Secretario y Vocal. El Asesor (<b>{ficha.informacionVigenteConsolidada.asesorActual}</b>) se integra automáticamente como 4.° miembro.
+                      Distribuya los 3 Dictaminantes vigentes en los cargos de Presidente, Secretario y Vocal. El Asesor (
+                      <b>{asesorActualNombre || 'Asesor'}</b>) se integra automáticamente como 4.° miembro.
                     </div>
                     <div className="grid grid-cols-1 gap-2">
                       <div>
@@ -1262,13 +1761,15 @@ export default function ExpedienteDetallePage() {
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="block font-bold text-gray-700 mb-1">
-                          Fecha Programada (Futura):
+                          Fecha Programada:
                         </label>
                         <input
                           type="date"
                           required
                           value={fechaSustProgramada}
-                          onChange={(e) => setFechaSustProgramada(e.target.value)}
+                          onChange={(e) =>
+                            setFechaSustProgramada(e.target.value)
+                          }
                           className="w-full rounded-lg border border-gray-300 p-2 text-xs"
                         />
                       </div>
@@ -1280,7 +1781,9 @@ export default function ExpedienteDetallePage() {
                           type="time"
                           required
                           value={horaSustProgramada}
-                          onChange={(e) => setHoraSustProgramada(e.target.value)}
+                          onChange={(e) =>
+                            setHoraSustProgramada(e.target.value)
+                          }
                           className="w-full rounded-lg border border-gray-300 p-2 text-xs"
                         />
                       </div>
@@ -1328,14 +1831,17 @@ export default function ExpedienteDetallePage() {
                       </label>
                       <select
                         value={tesistaSeleccionadoId}
-                        onChange={(e) => setTesistaSeleccionadoId(e.target.value)}
+                        onChange={(e) =>
+                          setTesistaSeleccionadoId(e.target.value)
+                        }
                         className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
                       >
                         {tesistasActivos
                           .filter((t) => !t.tituloResolucionId)
                           .map((t) => (
                             <option key={t.id} value={t.id}>
-                              {t.nombresApellidos} ({t.codigoEstudiante})
+                              {t.persona.nombreCompleto} (
+                              {t.persona.codigoUniversitario || 'S/C'})
                             </option>
                           ))}
                       </select>
@@ -1371,9 +1877,9 @@ export default function ExpedienteDetallePage() {
                     </div>
                     <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
                       <span className="text-[10px] font-bold uppercase text-gray-500 block">
-                        Mención Calculada Automáticamente en Servidor (RB-TP-12):
+                        Mención Calculada Automáticamente:
                       </span>
-                      <span className="font-extrabold text-[#0B2B5A] text-xs">
+                      <span className="font-extrabold text-[#1E73BE] text-xs">
                         {calcularMencionPreview(notaSust)}
                       </span>
                     </div>
@@ -1429,7 +1935,9 @@ export default function ExpedienteDetallePage() {
                           type="text"
                           required
                           value={detalleCausaManual}
-                          onChange={(e) => setDetalleCausaManual(e.target.value)}
+                          onChange={(e) =>
+                            setDetalleCausaManual(e.target.value)
+                          }
                           className="w-full rounded-lg border border-gray-300 p-2 text-xs"
                         />
                       </div>
@@ -1437,7 +1945,7 @@ export default function ExpedienteDetallePage() {
                   </div>
                 )}
 
-                {/* COMPLEMENTARIA 2: CAMBIO DE TÍTULO (DICE / DEBE DECIR - SIN CAUSA POR RN-CT-16) */}
+                {/* COMPLEMENTARIA 2: CAMBIO DE TÍTULO (DICE / DEBE DECIR) */}
                 {accionActiva === 'CAMBIO_TITULO' && (
                   <div className="space-y-3">
                     <div>
@@ -1452,7 +1960,7 @@ export default function ExpedienteDetallePage() {
                       />
                     </div>
                     <div>
-                      <label className="block font-bold text-[#0B2B5A] mb-1">
+                      <label className="block font-bold text-[#1E73BE] mb-1">
                         DEBE DECIR (Nuevo Título Modificado):
                       </label>
                       <textarea
@@ -1522,6 +2030,22 @@ export default function ExpedienteDetallePage() {
                           ))}
                       </select>
                     </div>
+                    {causaSeleccionadaObj?.requiereDetalleManual && (
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">
+                          Especificar Detalle Manual de la Causa:
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={detalleCausaManual}
+                          onChange={(e) =>
+                            setDetalleCausaManual(e.target.value)
+                          }
+                          className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1534,12 +2058,15 @@ export default function ExpedienteDetallePage() {
                       </label>
                       <select
                         value={tesistaSeleccionadoId}
-                        onChange={(e) => setTesistaSeleccionadoId(e.target.value)}
+                        onChange={(e) =>
+                          setTesistaSeleccionadoId(e.target.value)
+                        }
                         className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
                       >
                         {tesistasActivos.map((t) => (
                           <option key={t.id} value={t.id}>
-                            {t.nombresApellidos} ({t.codigoEstudiante})
+                            {t.persona.nombreCompleto} (
+                            {t.persona.codigoUniversitario || 'S/C'})
                           </option>
                         ))}
                       </select>
@@ -1597,7 +2124,7 @@ export default function ExpedienteDetallePage() {
                         Seleccionar Resolución(es) VIGENTES a Dejar Sin Efecto:
                       </label>
                       <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-lg p-2 space-y-1.5 bg-gray-50">
-                        {ficha.resoluciones
+                        {resoluciones
                           .filter(
                             (r) =>
                               r.situacionJuridica === 'VIGENTE' &&
@@ -1613,7 +2140,10 @@ export default function ExpedienteDetallePage() {
                                 checked={idsAfectadosDse.includes(r.id)}
                                 onChange={(e) => {
                                   if (e.target.checked) {
-                                    setIdsAfectadosDse((prev) => [...prev, r.id]);
+                                    setIdsAfectadosDse((prev) => [
+                                      ...prev,
+                                      r.id,
+                                    ]);
                                   } else {
                                     setIdsAfectadosDse((prev) =>
                                       prev.filter((id) => id !== r.id),
@@ -1649,116 +2179,49 @@ export default function ExpedienteDetallePage() {
                           ))}
                       </select>
                     </div>
+                    {causaSeleccionadaObj?.requiereDetalleManual && (
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">
+                          Especificar Detalle Manual de la Causa:
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={detalleCausaManual}
+                          onChange={(e) =>
+                            setDetalleCausaManual(e.target.value)
+                          }
+                          className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                        />
+                      </div>
+                    )}
                     <label className="flex items-center gap-2 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900 font-bold cursor-pointer">
                       <input
                         type="checkbox"
                         checked={reinicioIntegralDse}
-                        onChange={(e) => setReinicioIntegralDse(e.target.checked)}
+                        onChange={(e) =>
+                          setReinicioIntegralDse(e.target.checked)
+                        }
                       />
                       <span>
-                        Aplicar Reinicio Integral (Pasa el Expediente a ANULADO)
+                        Marcar Reinicio Integral en los datos de la resolución DSE
                       </span>
                     </label>
                   </div>
                 )}
 
-                {/* CORRECCIÓN DE BORRADOR EN ESTADO EMITIDO */}
-                {accionActiva === 'CORREGIR_BORRADOR' &&
-                  resolucionBorradorEditar && (
-                    <div className="space-y-3">
-                      <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
-                        Esta resolución sigue en estado <b>EMITIDO</b>. Al guardar, conservará el mismo número correlativo (<b>{resolucionBorradorEditar.numeroCompleto}</b>), incrementará a <b>v{resolucionBorradorEditar.versionPdf + 1}</b> y generará un nuevo código HASH.
-                      </div>
-                      {resolucionBorradorEditar.tipo === 'DICTAMEN' && (
-                        <div>
-                          <label className="block font-bold text-gray-700 mb-1">
-                            Corregir Título del Proyecto:
-                          </label>
-                          <textarea
-                            rows={3}
-                            required
-                            value={tituloProyecto}
-                            onChange={(e) => setTituloProyecto(e.target.value)}
-                            className="w-full rounded-lg border border-gray-300 p-2 text-xs uppercase"
-                          />
-                        </div>
-                      )}
-                      {resolucionBorradorEditar.tipo === 'APTO' && (
-                        <div>
-                          <label className="block font-bold text-gray-700 mb-1">
-                            Corregir N.° de Informe de Secretaría Académica:
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            value={numInformeSec}
-                            onChange={(e) => setNumInformeSec(e.target.value)}
-                            className="w-full rounded-lg border border-gray-300 p-2 text-xs uppercase"
-                          />
-                        </div>
-                      )}
-                      {resolucionBorradorEditar.tipo === 'FECHA_HORA' && (
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="block font-bold text-gray-700 mb-1">
-                              Nueva Hora:
-                            </label>
-                            <input
-                              type="time"
-                              value={horaSustProgramada}
-                              onChange={(e) =>
-                                setHoraSustProgramada(e.target.value)
-                              }
-                              className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="block font-bold text-gray-700 mb-1">
-                              Nuevo Lugar:
-                            </label>
-                            <input
-                              type="text"
-                              value={lugarSust}
-                              onChange={(e) => setLugarSust(e.target.value)}
-                              className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                            />
-                          </div>
-                        </div>
-                      )}
-                      {resolucionBorradorEditar.tipo === 'TITULO' && (
-                        <div>
-                          <label className="block font-bold text-gray-700 mb-1">
-                            Corregir Nota Entera (14 a 20):
-                          </label>
-                          <input
-                            type="number"
-                            min={14}
-                            max={20}
-                            value={notaSust}
-                            onChange={(e) => setNotaSust(Number(e.target.value))}
-                            className="w-full rounded-lg border border-gray-300 p-2 text-xs font-bold"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
                 <button
                   type="submit"
                   disabled={procesandoAccion}
-                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#0B2B5A] py-2.5 px-4 text-xs font-bold text-white shadow hover:bg-[#082044] disabled:opacity-60 transition"
+                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#1E73BE] py-2.5 px-4 text-xs font-bold text-white shadow hover:bg-[#175B96] disabled:opacity-60 transition"
                 >
                   {procesandoAccion ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Procesando Transacción...</span>
+                      <span>Emitiendo Resolución...</span>
                     </>
                   ) : (
-                    <span>
-                      {accionActiva === 'CORREGIR_BORRADOR'
-                        ? 'Regenerar PDF Conservando Número'
-                        : 'Confirmar Emisión y Asignar Número Oficial'}
-                    </span>
+                    <span>Confirmar Emisión y Asignar Número Oficial</span>
                   )}
                 </button>
               </form>
@@ -1770,20 +2233,20 @@ export default function ExpedienteDetallePage() {
       {/* =================================================================== */}
       {/* HISTORIAL DOCUMENTAL INMUTABLE DEL EXPEDIENTE                       */}
       {/* =================================================================== */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm space-y-3">
+      <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-3">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-bold text-gray-900">
-              Historial Documental del Expediente ({ficha.resoluciones.length})
+              Historial Documental del Expediente ({resoluciones.length})
             </h3>
             <p className="text-xs text-gray-500">
-              Cadena de antecedentes, Sello de Doble Vía (ID-TRAMITE + HASH) y descarga de PDF oficial
+              Cadena de resoluciones, Sello de Doble Vía (ID-TRAMITE + HASH) y descarga de PDF oficial
             </p>
           </div>
           <button
             type="button"
-            onClick={cargarTodo}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#0B2B5A] hover:underline"
+            onClick={() => void cargarTodo()}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1E73BE] hover:underline"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             <span>Refrescar Historial</span>
@@ -1803,7 +2266,7 @@ export default function ExpedienteDetallePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {ficha.resoluciones.length === 0 ? (
+              {resoluciones.length === 0 ? (
                 <tr>
                   <td
                     colSpan={6}
@@ -1813,9 +2276,9 @@ export default function ExpedienteDetallePage() {
                   </td>
                 </tr>
               ) : (
-                [...ficha.resoluciones].reverse().map((res) => (
+                [...resoluciones].reverse().map((res) => (
                   <tr key={res.id} className="hover:bg-gray-50/70">
-                    <td className="py-3 px-3 font-mono font-bold text-[#0B2B5A]">
+                    <td className="py-3 px-3 font-mono font-bold text-[#1E73BE]">
                       {res.numeroCompleto}
                     </td>
                     <td className="py-3 px-3">
@@ -1857,50 +2320,35 @@ export default function ExpedienteDetallePage() {
                       </span>
                     </td>
                     <td className="py-3 px-3 font-mono text-[11px] text-gray-500">
-                      {res.idTramiteControl} | v{res.versionPdf} (
-                      {res.hashVersionGenerado.slice(0, 8)})
+                      {res.idTramiteControl} | v{res.versionPdf}
+                      {res.hashVersionGenerado
+                        ? ` (${res.hashVersionGenerado.slice(0, 8)})`
+                        : ''}
                     </td>
-                    <td className="py-3 px-3 text-right space-x-1.5">
+                    <td className="py-3 px-3 text-right space-x-1.5 whitespace-nowrap">
                       <button
                         type="button"
-                        onClick={() => handleVerPdf(res)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[#0B2B5A] text-white text-[11px] font-semibold hover:bg-[#082044]"
+                        onClick={() => void handleVerPdf(res)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[#1E73BE] text-white text-[11px] font-semibold hover:bg-[#175B96]"
                       >
                         <FileText className="w-3.5 h-3.5" />
-                        <span>Ver PDF</span>
+                        <span>
+                          {res.estadoDocumental === 'FIRMADO' &&
+                          res.pdfFirmadoPath
+                            ? 'Ver PDF Firmado'
+                            : 'Ver PDF'}
+                        </span>
                       </button>
 
                       {res.estadoDocumental === 'EMITIDO' &&
                         res.situacionJuridica === 'VIGENTE' && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setResolucionBorradorEditar(res);
-                                setTituloProyecto(
-                                  String(
-                                    res.datosEspecificos?.tituloProyecto ||
-                                      ficha.tituloActual ||
-                                      '',
-                                  ),
-                                );
-                                setAccionActiva('CORREGIR_BORRADOR');
-                              }}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-gray-300 bg-white text-gray-700 text-[11px] font-semibold hover:bg-gray-100"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                              <span>Regenerar</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleConfirmarFirma(res)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700"
-                            >
-                              <FileCheck2 className="w-3.5 h-3.5" />
-                              <span>Confirmar Firma</span>
-                            </button>
-                          </>
+                          <Link
+                            href="/dashboard/firmas"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-600 text-white text-[11px] font-semibold hover:bg-amber-700"
+                          >
+                            <FileSignature className="w-3.5 h-3.5" />
+                            <span>Firmar en Firmas</span>
+                          </Link>
                         )}
                     </td>
                   </tr>
