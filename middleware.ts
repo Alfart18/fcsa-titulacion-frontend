@@ -18,6 +18,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(dashboardUrl);
   }
 
+  // Si entra a la raíz / sin token -> redirigir a /login
+  if (pathname === '/' && !token) {
+    const loginUrl = new URL('/login', request.url);
+    return NextResponse.redirect(loginUrl);
+  }
+
   return NextResponse.next();
 }
 

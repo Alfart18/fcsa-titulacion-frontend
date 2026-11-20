@@ -4,7 +4,7 @@
 import React from 'react';
 import Link from 'next/link';
 import {
-  FolderKanban, FileSignature, BookOpen, ShieldCheck, Code, Database,
+  FolderKanban, FileSignature, Users, ShieldCheck, Code, Database,
   Palette, Server, Mail, Phone, MapPin, GraduationCap, CheckCircle2,
   ChevronRight, Building2, Lock, PanelLeft
 } from 'lucide-react';
@@ -71,12 +71,12 @@ export default function DashboardPage() {
             <p className="text-xs text-gray-500">Validación PKCS#7</p>
           </Link>
 
-          <Link href="/dashboard/numeracion" className="group flex flex-col items-center justify-center p-6 bg-amber-50/50 border border-amber-100 rounded-2xl hover:shadow-md hover:border-amber-200 transition-all text-center">
+          <Link href="/dashboard/usuarios" className="group flex flex-col items-center justify-center p-6 bg-amber-50/50 border border-amber-100 rounded-2xl hover:shadow-md hover:border-amber-200 transition-all text-center">
             <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm mb-3 group-hover:scale-110 transition-transform">
-              <BookOpen className="w-6 h-6 text-amber-600" />
+              <Users className="w-6 h-6 text-amber-600" />
             </div>
-            <h3 className="text-sm font-bold text-gray-900 mb-1">Libros Oficiales</h3>
-            <p className="text-xs text-gray-500">Numeración y Registro</p>
+            <h3 className="text-sm font-bold text-gray-900 mb-1">Usuarios y Firmante</h3>
+            <p className="text-xs text-gray-500">Accesos y Decanato</p>
           </Link>
 
           <Link href="/dashboard/docentes" className="group flex flex-col items-center justify-center p-6 bg-rose-50/50 border border-rose-100 rounded-2xl hover:shadow-md hover:border-rose-200 transition-all text-center">

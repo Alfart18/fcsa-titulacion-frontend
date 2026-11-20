@@ -6,8 +6,9 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  FolderKanban, FileSignature, BookOpen, BookMarked, Users, GraduationCap,
-  ShieldAlert, History, LayoutDashboard, LogOut, Menu, X, ListChecks
+  FolderKanban, FileSignature, Users, GraduationCap,
+  ShieldAlert, LayoutDashboard, LogOut, Menu, X,
+  BookOpen, BarChart3, FileText, Settings, UserSquare2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cerrarSesion, obtenerUsuarioSesion, RolUsuario, UsuarioSesion } from '@/lib/api';
@@ -24,17 +25,20 @@ interface ItemNavegacion {
   badgeTexto?: string;
 }
 
+const TODOS_LOS_ROLES: RolUsuario[] = ['ADMIN', 'DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'];
+
 const MENU_ITEMS: ItemNavegacion[] = [
-  { nombre: 'Resumen General', href: '/dashboard', icono: LayoutDashboard, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
-  { nombre: 'Expedientes y 7 Pasos', href: '/dashboard/expedientes', icono: FolderKanban, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
-  { nombre: 'Lotes y Firmas PKCS#7', href: '/dashboard/firmas', icono: FileSignature, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
-  { nombre: 'Libro de Numeración', href: '/dashboard/numeracion', icono: BookOpen, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO', badgeTexto: 'ORD / CF' },
-  { nombre: 'Libro de Inscripción', href: '/dashboard/libro-inscripcion', icono: BookMarked, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
-  { nombre: 'Catálogo de Docentes', href: '/dashboard/docentes', icono: GraduationCap, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
-  { nombre: 'Catálogo de Causas', href: '/dashboard/causas', icono: ListChecks, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
-  { nombre: 'Mi Actividad', href: '/dashboard/mi-actividad', icono: History, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA', 'ADMINISTRATIVO'], seccion: 'OPERATIVO' },
-  { nombre: 'Auditoría Global', href: '/dashboard/auditoria', icono: ShieldAlert, rolesPermitidos: ['DECANO', 'SECRETARIA_ACADEMICA'], seccion: 'GOBIERNO' },
-  { nombre: 'Usuarios y Decano Firmante', href: '/dashboard/usuarios', icono: Users, rolesPermitidos: ['DECANO'], seccion: 'GOBIERNO', badgeTexto: 'DECANO' },
+  { nombre: 'Resumen General', href: '/dashboard', icono: LayoutDashboard, rolesPermitidos: TODOS_LOS_ROLES, seccion: 'OPERATIVO' },
+  { nombre: 'Expedientes y 7 Pasos', href: '/dashboard/expedientes', icono: FolderKanban, rolesPermitidos: TODOS_LOS_ROLES, seccion: 'OPERATIVO' },
+  { nombre: 'Lotes y Firmas PKCS#7', href: '/dashboard/firmas', icono: FileSignature, rolesPermitidos: TODOS_LOS_ROLES, seccion: 'OPERATIVO' },
+  { nombre: 'Libros Oficiales', href: '/dashboard/libros', icono: BookOpen, rolesPermitidos: TODOS_LOS_ROLES, seccion: 'OPERATIVO', badgeTexto: 'ORD / CF' },
+  { nombre: 'Catálogo de Docentes', href: '/dashboard/docentes', icono: GraduationCap, rolesPermitidos: TODOS_LOS_ROLES, seccion: 'OPERATIVO' },
+  { nombre: 'Estudiantes', href: '/dashboard/estudiantes', icono: UserSquare2, rolesPermitidos: TODOS_LOS_ROLES, seccion: 'OPERATIVO' },
+  { nombre: 'Plantillas', href: '/dashboard/plantillas', icono: FileText, rolesPermitidos: TODOS_LOS_ROLES, seccion: 'OPERATIVO' },
+  { nombre: 'Reportes y Estadísticas', href: '/dashboard/reportes', icono: BarChart3, rolesPermitidos: ['ADMIN', 'DECANO'], seccion: 'GOBIERNO' },
+  { nombre: 'Configuración y Causas', href: '/dashboard/configuracion', icono: Settings, rolesPermitidos: TODOS_LOS_ROLES, seccion: 'GOBIERNO' },
+  { nombre: 'Auditoría Global', href: '/dashboard/auditoria', icono: ShieldAlert, rolesPermitidos: ['ADMIN', 'DECANO', 'SECRETARIA_ACADEMICA'], seccion: 'GOBIERNO' },
+  { nombre: 'Usuarios y Decano Firmante', href: '/dashboard/usuarios', icono: Users, rolesPermitidos: ['ADMIN', 'DECANO'], seccion: 'GOBIERNO', badgeTexto: 'ADMIN / DECANO' },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -76,6 +80,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const itemsGobierno = MENU_ITEMS.filter((item) => item.seccion === 'GOBIERNO' && item.rolesPermitidos.includes(usuario.rol));
 
   const formatearEtiquetaRol = (rol: RolUsuario) => {
+    if (rol === 'ADMIN') return 'Administrador';
     if (rol === 'DECANO') return 'Decano';
     if (rol === 'SECRETARIA_ACADEMICA') return 'Secretaría Académica';
     return 'Administrativo';

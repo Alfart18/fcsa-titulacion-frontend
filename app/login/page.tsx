@@ -5,8 +5,15 @@ import React, { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { ApiError, guardarSesion, iniciarSesionApi } from '@/lib/api';
+import { ApiError, guardarSesion, iniciarSesionApi, RolUsuario } from '@/lib/api';
 import Image from 'next/image';
+
+const ETIQUETAS_ROL: Record<RolUsuario, string> = {
+  ADMIN: 'Administrador',
+  DECANO: 'Decano',
+  SECRETARIA_ACADEMICA: 'Secretaría Académica',
+  ADMINISTRATIVO: 'Administrativo',
+};
 
 export default function LoginPage() {
   const router = useRouter();
@@ -32,15 +39,20 @@ export default function LoginPage() {
       const respuesta = await iniciarSesionApi(correo.trim(), password);
       guardarSesion(respuesta);
 
+      const etiquetaRol = ETIQUETAS_ROL[respuesta.usuario.rol] ?? respuesta.usuario.rol;
       toast.success(`Bienvenido(a), ${respuesta.usuario.nombresCompletos}`, {
-        description: `Sesión iniciada como ${respuesta.usuario.rol} (${respuesta.usuario.iniciales})`,
+        description: `Sesión iniciada como ${etiquetaRol} (${respuesta.usuario.iniciales})`,
       });
 
       router.push('/dashboard');
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 401) {
-          setErrorMensaje('Credenciales incorrectas');
+          setErrorMensaje(err.message || 'Credenciales incorrectas.');
+        } else if (err.status === 429) {
+          setErrorMensaje(
+            'Demasiados intentos de inicio de sesión. Espere un minuto e intente nuevamente.',
+          );
         } else {
           setErrorMensaje(err.message);
         }
