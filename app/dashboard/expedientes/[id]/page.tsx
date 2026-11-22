@@ -1,7 +1,14 @@
 // Archivo: app/dashboard/expedientes/[id]/page.tsx
 'use client';
 
-import React, { useEffect, useMemo, useState, FormEvent } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  FormEvent,
+} from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -20,6 +27,7 @@ import {
   ExternalLink,
   ChevronRight,
   PanelLeft,
+  Eye,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -27,6 +35,8 @@ import {
   apiFetch,
   ApiError,
   obtenerUsuarioSesion,
+  previsualizarPdfResolucionApi,
+  PrevisualizarPdfPayload,
   UsuarioSesion,
 } from '@/lib/api';
 import { useSidebar } from '../../sidebar-context';
@@ -177,6 +187,17 @@ interface CrearResolucionDtoPayload {
   datosEspecificos: Record<string, unknown>;
 }
 
+interface PayloadEmisionCompleto extends CrearResolucionDtoPayload {
+  codigoExpediente: string;
+}
+
+function calcularMencionPreview(nota: number): string {
+  if (nota < 14 || nota > 20) return 'BLOQUEADO (Nota debe ser entre 14 y 20)';
+  if (nota <= 16) return 'APROBADO';
+  if (nota <= 18) return 'APROBADO CON DISTINCIÓN';
+  return 'APROBADO CON DISTINCIÓN Y FELICITACIÓN PÚBLICA';
+}
+
 export default function ExpedienteDetallePage() {
   const params = useParams<{ id: string }>();
   const expedienteId = params.id;
@@ -194,11 +215,14 @@ export default function ExpedienteDetallePage() {
   const [cambiandoEstado, setCambiandoEstado] = useState(false);
   const [errorEmision, setErrorEmision] = useState<string | null>(null);
 
-  // Acción seleccionada actualmente en el panel derecho
+  // Acción seleccionada actualmente en el espacio de emisión
   const [accionActiva, setAccionActiva] = useState<TipoResolucionBackend | null>(null);
 
   // Estados de formularios para Pasos 1 al 7 y Complementarias
   const [asesorId, setAsesorId] = useState('');
+  const [fechaCartaAceptacion, setFechaCartaAceptacion] = useState(
+    () => new Date().toISOString().slice(0, 10),
+  );
   const [tituloProyecto, setTituloProyecto] = useState('');
   const [dict1Id, setDict1Id] = useState('');
   const [dict2Id, setDict2Id] = useState('');
@@ -206,7 +230,7 @@ export default function ExpedienteDetallePage() {
   const [tesistaSeleccionadoId, setTesistaSeleccionadoId] = useState('');
   const [numInformeSec, setNumInformeSec] = useState('INF-001-2026-SA-FCSA-UAC');
   const [fechaInformeSec, setFechaInformeSec] = useState(
-    new Date().toISOString().slice(0, 10),
+    () => new Date().toISOString().slice(0, 10),
   );
   const [presidenteId, setPresidenteId] = useState('');
   const [secretarioId, setSecretarioId] = useState('');
@@ -217,7 +241,7 @@ export default function ExpedienteDetallePage() {
   const [lugarSust, setLugarSust] = useState('Salón de Grados de la FCSa');
   const [notaSust, setNotaSust] = useState<number>(18);
   const [fechaSustReal, setFechaSustReal] = useState(
-    new Date().toISOString().slice(0, 10),
+    () => new Date().toISOString().slice(0, 10),
   );
 
   // Estados adicionales para Complementarias y DSE
@@ -231,6 +255,15 @@ export default function ExpedienteDetallePage() {
   const [serieDse, setSerieDse] = useState<'ORD' | 'CF'>('ORD');
   const [idsAfectadosDse, setIdsAfectadosDse] = useState<string[]>([]);
   const [reinicioIntegralDse, setReinicioIntegralDse] = useState(false);
+
+  // Estados de Vista Previa PDF en vivo
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewCargando, setPreviewCargando] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const previewUrlRef = useRef<string | null>(null);
+  const skipDebounceRef = useRef(false);
+  const workspaceEmisionRef = useRef<HTMLDivElement | null>(null);
 
   const puedeEmitir =
     usuario?.rol === 'ADMIN' ||
@@ -337,11 +370,476 @@ export default function ExpedienteDetallePage() {
       );
   }, [docentesActivos, ficha, escuelaCatalogoActual]);
 
-  const nombreDocentePorId = (docenteId: string | null | undefined): string => {
-    if (!docenteId) return '';
-    const encontrado = docentesEmbudo.find((d) => d.docenteId === docenteId);
-    return encontrado ? encontrado.nombreParaResolucion : '';
-  };
+  const nombreDocentePorId = useCallback(
+    (docenteId: string | null | undefined): string => {
+      if (!docenteId) return '';
+      const encontrado = docentesEmbudo.find((d) => d.docenteId === docenteId);
+      return encontrado ? encontrado.nombreParaResolucion : '';
+    },
+    [docentesEmbudo],
+  );
+
+  const tesistasActivos = useMemo(
+    () => (ficha ? ficha.tesistas.filter((t) => t.estado !== 'DESISTIDO') : []),
+    [ficha],
+  );
+
+  const obtenerResolucionPorId = useCallback(
+    (resId: string | null) =>
+      resId ? resoluciones.find((r) => r.id === resId) || null : null,
+    [resoluciones],
+  );
+
+  const resAsesorObj = useMemo(
+    () => obtenerResolucionPorId(ficha?.asesorResolucionId ?? null),
+    [ficha?.asesorResolucionId, obtenerResolucionPorId],
+  );
+  const resDictObj = useMemo(
+    () => obtenerResolucionPorId(ficha?.dictaminantesResolucionId ?? null),
+    [ficha?.dictaminantesResolucionId, obtenerResolucionPorId],
+  );
+  const resDictamenOrig = useMemo(
+    () =>
+      resoluciones.find(
+        (r) => r.tipo === 'DICTAMEN' && r.situacionJuridica === 'VIGENTE',
+      ) || null,
+    [resoluciones],
+  );
+  const resTercerDictOrig = useMemo(
+    () =>
+      resoluciones.find(
+        (r) => r.tipo === 'TERCER_DICT' && r.situacionJuridica === 'VIGENTE',
+      ) || null,
+    [resoluciones],
+  );
+
+  const asesorActualNombre = useMemo(
+    () =>
+      nombreDocentePorId(ficha?.asesorDocenteId) ||
+      String(
+        resAsesorObj?.datosEspecificos?.asesorNombreCompletoSnapshot ||
+          resAsesorObj?.datosEspecificos?.nombreAsesor ||
+          '',
+      ) ||
+      null,
+    [ficha?.asesorDocenteId, nombreDocentePorId, resAsesorObj],
+  );
+
+  const dict1ActualNombre = useMemo(
+    () =>
+      nombreDocentePorId(ficha?.dictaminante1Id) ||
+      String(
+        resDictObj?.datosEspecificos?.dictaminante1Snapshot ||
+          resDictObj?.datosEspecificos?.nombreDictaminante1 ||
+          resDictamenOrig?.datosEspecificos?.dictaminante1Snapshot ||
+          resDictamenOrig?.datosEspecificos?.nombreDictaminante1 ||
+          '',
+      ) ||
+      null,
+    [ficha?.dictaminante1Id, nombreDocentePorId, resDictObj, resDictamenOrig],
+  );
+
+  const dict2ActualNombre = useMemo(
+    () =>
+      nombreDocentePorId(ficha?.dictaminante2Id) ||
+      String(
+        resDictObj?.datosEspecificos?.dictaminante2Snapshot ||
+          resDictObj?.datosEspecificos?.nombreDictaminante2 ||
+          resDictamenOrig?.datosEspecificos?.dictaminante2Snapshot ||
+          resDictamenOrig?.datosEspecificos?.nombreDictaminante2 ||
+          '',
+      ) ||
+      null,
+    [ficha?.dictaminante2Id, nombreDocentePorId, resDictObj, resDictamenOrig],
+  );
+
+  const dict3ActualNombre = useMemo(
+    () =>
+      nombreDocentePorId(ficha?.dictaminante3Id) ||
+      String(
+        resTercerDictOrig?.datosEspecificos?.dictaminante3Snapshot ||
+          resTercerDictOrig?.datosEspecificos?.nombreDictaminante3 ||
+          resDictObj?.datosEspecificos?.dictaminante3Snapshot ||
+          resDictObj?.datosEspecificos?.nombreDictaminante3 ||
+          '',
+      ) ||
+      null,
+    [ficha?.dictaminante3Id, nombreDocentePorId, resTercerDictOrig, resDictObj],
+  );
+
+  const causaSeleccionadaObj = useMemo(
+    () => causas.find((c) => c.id === Number(causaIdSeleccionada)),
+    [causas, causaIdSeleccionada],
+  );
+
+  // Helper puro que construye el payload exacto desde el estado actual (usado por Emisión y Vista Previa)
+  const construirPayloadEmision = useCallback((): PayloadEmisionCompleto | null => {
+    if (!ficha || !accionActiva) return null;
+
+    const baseSnapshots: Record<string, unknown> = {
+      escuelaProfesionalSnapshot: ficha.escuelaProfesional.nombre,
+      gradoBachillerSnapshot: ficha.escuelaProfesional.gradoBachiller,
+      tituloProfesionalSnapshot: ficha.escuelaProfesional.tituloProfesional,
+      departamentoAcademico:
+        departamentoDefectoActual?.nombre.replace(
+          'Departamento Académico de ',
+          '',
+        ) || ficha.escuelaProfesional.nombre,
+      tesistasSnapshot: tesistasActivos.map((t) => ({
+        nombresApellidos: t.persona.nombreCompleto,
+        codigoEstudiante: t.persona.codigoUniversitario || '',
+      })),
+    };
+
+    const causaTextoConsolidado = causaSeleccionadaObj
+      ? detalleCausaManual.trim()
+        ? `${causaSeleccionadaObj.descripcion}: ${detalleCausaManual.trim()}`
+        : causaSeleccionadaObj.descripcion
+      : detalleCausaManual.trim();
+
+    const payload: PayloadEmisionCompleto = {
+      expedienteId: ficha.id,
+      codigoExpediente: ficha.codigoExpediente,
+      tipo: accionActiva,
+      datosEspecificos: { ...baseSnapshots },
+    };
+
+    if (accionActiva === 'ASESOR') {
+      payload.serie = 'ORD';
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        asesorDocenteId: asesorId,
+        asesorNombreCompletoSnapshot: nombreDocentePorId(asesorId),
+        ...(fechaCartaAceptacion ? { fechaCartaAceptacion } : {}),
+      };
+    } else if (accionActiva === 'DICTAMEN') {
+      payload.serie = 'ORD';
+      if (ficha.asesorResolucionId) {
+        payload.resolucionAntecedenteId = ficha.asesorResolucionId;
+      }
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        tituloTesis: tituloProyecto.trim(),
+        tituloProyecto: tituloProyecto.trim(),
+        tituloVigenteSnapshot: tituloProyecto.trim(),
+        departamentoAcademicoId: escuelaCatalogoActual?.departamentoDefectoId,
+        dictaminante1Id: dict1Id,
+        dictaminante2Id: dict2Id,
+        dictaminante1Snapshot: nombreDocentePorId(dict1Id),
+        dictaminante2Snapshot: nombreDocentePorId(dict2Id),
+      };
+    } else if (accionActiva === 'INSCRIPCION') {
+      payload.serie = 'ORD';
+      if (ficha.dictaminantesResolucionId) {
+        payload.resolucionAntecedenteId = ficha.dictaminantesResolucionId;
+      }
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        tituloInscritoSnapshot: ficha.tituloActual || '',
+        tituloProyecto: ficha.tituloActual || '',
+        resolucionDictamenNumeroSnapshot: resDictObj?.numeroCompleto || '',
+        fechaResolucionDictamenSnapshot: resDictObj?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'TERCER_DICT') {
+      payload.serie = 'ORD';
+      if (ficha.inscripcionResolucionId) {
+        payload.resolucionAntecedenteId = ficha.inscripcionResolucionId;
+      }
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        tituloVigenteSnapshot: ficha.tituloActual || '',
+        dictaminante1Id: ficha.dictaminante1Id,
+        dictaminante2Id: ficha.dictaminante2Id,
+        dictaminante3Id: dict3Id,
+        dictaminante1Snapshot: dict1ActualNombre || '',
+        dictaminante2Snapshot: dict2ActualNombre || '',
+        dictaminante3Snapshot: nombreDocentePorId(dict3Id),
+      };
+    } else if (accionActiva === 'APTO') {
+      const tesistaObj = tesistasActivos.find(
+        (t) => t.id === tesistaSeleccionadoId,
+      );
+      payload.serie = 'CF';
+      if (tesistaObj) {
+        payload.tesistaId = tesistaObj.id;
+      }
+      if (ficha.dictaminantesResolucionId) {
+        payload.resolucionAntecedenteId = ficha.dictaminantesResolucionId;
+      }
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        tesistaNombresSnapshot: tesistaObj?.persona.nombreCompleto || '',
+        numeroInformeSecretariaSnapshot: numInformeSec.trim(),
+        fechaInformeSecretariaSnapshot: fechaInformeSec,
+      };
+    } else if (accionActiva === 'FECHA_HORA') {
+      payload.serie = 'ORD';
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        tituloVigenteSnapshot: ficha.tituloActual || '',
+        presidenteDocenteId: presidenteId,
+        secretarioDocenteId: secretarioId,
+        vocalDocenteId: vocalId,
+        fechaSustentacion: fechaSustProgramada,
+        horaSustentacion: horaSustProgramada,
+        modalidad: modalidadSust,
+        lugarReferencia: lugarSust.trim(),
+        asesorNombreCompletoSnapshot: asesorActualNombre || '',
+        juradoSnapshot: {
+          presidente: nombreDocentePorId(presidenteId) || dict1ActualNombre || '',
+          secretario: nombreDocentePorId(secretarioId) || dict2ActualNombre || '',
+          dictaminante: nombreDocentePorId(vocalId) || dict3ActualNombre || '',
+          asesor: asesorActualNombre || '',
+        },
+      };
+    } else if (accionActiva === 'TITULO') {
+      const tesistaObj = tesistasActivos.find(
+        (t) => t.id === tesistaSeleccionadoId,
+      );
+      payload.serie = 'CF';
+      if (tesistaObj) {
+        payload.tesistaId = tesistaObj.id;
+      }
+      if (ficha.fechaHoraResolucionId) {
+        payload.resolucionAntecedenteId = ficha.fechaHoraResolucionId;
+      }
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        tesistaNombresSnapshot: tesistaObj?.persona.nombreCompleto || '',
+        notaSustentacion: Number(notaSust),
+        resultadoSustentacion: calcularMencionPreview(Number(notaSust)),
+        fechaSustentacionReal: fechaSustReal,
+      };
+    } else if (accionActiva === 'CAMBIO_ASESOR') {
+      payload.serie = 'ORD';
+      if (ficha.asesorResolucionId) {
+        payload.resolucionAntecedenteId = ficha.asesorResolucionId;
+      }
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        asesorDocenteId: asesorId,
+        asesorNombreCompletoSnapshot: nombreDocentePorId(asesorId),
+        asesorSalienteSnapshot: asesorActualNombre || '',
+        causaId: Number(causaIdSeleccionada) || undefined,
+        causaTextoConsolidadoSnapshot: causaTextoConsolidado,
+        resolucionAntecedenteNumeroSnapshot: resAsesorObj?.numeroCompleto || '',
+        fechaResolucionAntecedenteSnapshot: resAsesorObj?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'CAMBIO_TITULO') {
+      const resTituloPrev =
+        obtenerResolucionPorId(ficha.tituloResolucionId) || resDictObj;
+      payload.serie = 'ORD';
+      if (resTituloPrev) {
+        payload.resolucionAntecedenteId = resTituloPrev.id;
+      }
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        nuevoTitulo: tituloProyecto.trim(),
+        tituloTesis: tituloProyecto.trim(),
+        diceTituloAnterior: ficha.tituloActual || '',
+        debeDecirNuevoTitulo: tituloProyecto.trim(),
+        resolucionAntecedenteNumeroSnapshot: resTituloPrev?.numeroCompleto || '',
+        fechaResolucionAntecedenteSnapshot: resTituloPrev?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'CAMBIO_DICTAMINANTE') {
+      payload.serie = 'ORD';
+      if (ficha.dictaminantesResolucionId) {
+        payload.resolucionAntecedenteId = ficha.dictaminantesResolucionId;
+      }
+      const slotActualizado: Record<string, string> = {};
+      if (dictSalienteId === ficha.dictaminante1Id) {
+        slotActualizado.dictaminante1Id = dictEntranteId;
+      } else if (dictSalienteId === ficha.dictaminante2Id) {
+        slotActualizado.dictaminante2Id = dictEntranteId;
+      } else if (dictSalienteId === ficha.dictaminante3Id) {
+        slotActualizado.dictaminante3Id = dictEntranteId;
+      }
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        ...slotActualizado,
+        dictaminanteSalienteId: dictSalienteId,
+        dictaminanteEntranteId: dictEntranteId,
+        dictaminanteSalienteSnapshot: nombreDocentePorId(dictSalienteId),
+        dictaminanteEntranteSnapshot: nombreDocentePorId(dictEntranteId),
+        causaId: Number(causaIdSeleccionada) || undefined,
+        causaTextoConsolidadoSnapshot: causaTextoConsolidado,
+        tituloVigenteSnapshot: ficha.tituloActual || '',
+        resolucionAntecedenteNumeroSnapshot: resDictObj?.numeroCompleto || '',
+        fechaResolucionAntecedente: resDictObj?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'DESISTIMIENTO') {
+      const desistente = tesistasActivos.find(
+        (t) => t.id === tesistaSeleccionadoId,
+      );
+      const continua = desistente
+        ? tesistasActivos.find((t) => t.id !== desistente.id)
+        : undefined;
+      payload.serie = 'ORD';
+      if (desistente) {
+        payload.tesistaId = desistente.id;
+      }
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        tesistaDesistenteId: desistente?.id || '',
+        tesistaDesistenteNombresSnapshot: desistente?.persona.nombreCompleto || '',
+        tesistaContinuaNombresSnapshot: continua?.persona.nombreCompleto || '',
+        referenciaSolicitudExterna: refSolicitudDesistimiento.trim(),
+        ...(fundamentoDesistimiento.trim()
+          ? { fundamentoSolicitud: fundamentoDesistimiento.trim() }
+          : {}),
+        resolucionAsesorNumeroSnapshot: resAsesorObj?.numeroCompleto || '',
+        fechaResolucionAsesorSnapshot: resAsesorObj?.fechaEmision || '',
+        resolucionDictamenNumeroSnapshot: resDictObj?.numeroCompleto || '',
+        fechaResolucionDictamenSnapshot: resDictObj?.fechaEmision || '',
+      };
+    } else if (accionActiva === 'DSE') {
+      const afectadasObjs = resoluciones.filter((r) =>
+        idsAfectadosDse.includes(r.id),
+      );
+      payload.serie = serieDse;
+      payload.datosEspecificos = {
+        ...baseSnapshots,
+        resolucionesAfectadasIds: idsAfectadosDse,
+        resolucionesAfectadasSnapshot: afectadasObjs.map((r) => ({
+          numeroCompleto: r.numeroCompleto,
+          fechaEmision: r.fechaEmision,
+          tipo: r.tipo,
+        })),
+        causaId: Number(causaIdSeleccionada) || undefined,
+        causaTextoConsolidadoSnapshot: causaTextoConsolidado,
+        reinicioIntegral: reinicioIntegralDse,
+      };
+    }
+
+    return payload;
+  }, [
+    accionActiva,
+    asesorActualNombre,
+    asesorId,
+    causaIdSeleccionada,
+    causaSeleccionadaObj,
+    departamentoDefectoActual,
+    detalleCausaManual,
+    dict1ActualNombre,
+    dict1Id,
+    dict2ActualNombre,
+    dict2Id,
+    dict3ActualNombre,
+    dict3Id,
+    dictEntranteId,
+    dictSalienteId,
+    escuelaCatalogoActual,
+    fechaCartaAceptacion,
+    fechaInformeSec,
+    fechaSustProgramada,
+    fechaSustReal,
+    ficha,
+    fundamentoDesistimiento,
+    horaSustProgramada,
+    idsAfectadosDse,
+    lugarSust,
+    modalidadSust,
+    nombreDocentePorId,
+    notaSust,
+    numInformeSec,
+    obtenerResolucionPorId,
+    presidenteId,
+    refSolicitudDesistimiento,
+    reinicioIntegralDse,
+    resAsesorObj,
+    resDictObj,
+    resoluciones,
+    secretarioId,
+    serieDse,
+    tesistaSeleccionadoId,
+    tesistasActivos,
+    tituloProyecto,
+    vocalId,
+  ]);
+
+  const payloadPreviewJson = useMemo(() => {
+    const payload = construirPayloadEmision();
+    if (!payload) return null;
+    const previewBody: PrevisualizarPdfPayload = {
+      tipo: payload.tipo,
+      serie: payload.serie,
+      expedienteId: payload.expedienteId,
+      codigoExpediente: payload.codigoExpediente,
+      datosEspecificos: payload.datosEspecificos,
+    };
+    return JSON.stringify(previewBody);
+  }, [construirPayloadEmision]);
+
+  const limpiarPreview = useCallback(() => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    setPreviewUrl(null);
+    setPreviewError(null);
+    setPreviewCargando(false);
+  }, []);
+
+  // Vista previa PDF en vivo con debounce de 500ms y cancelación por AbortController
+  useEffect(() => {
+    if (!accionActiva || !payloadPreviewJson) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const delayMs = skipDebounceRef.current ? 0 : 500;
+    skipDebounceRef.current = false;
+
+    const timer = setTimeout(() => {
+      setPreviewCargando(true);
+      setPreviewError(null);
+
+      const previewBody = JSON.parse(
+        payloadPreviewJson,
+      ) as PrevisualizarPdfPayload;
+
+      void previsualizarPdfResolucionApi(previewBody, controller.signal)
+        .then((blob) => {
+          if (controller.signal.aborted) return;
+          const nextUrl = URL.createObjectURL(blob);
+          if (previewUrlRef.current) {
+            URL.revokeObjectURL(previewUrlRef.current);
+          }
+          previewUrlRef.current = nextUrl;
+          setPreviewUrl(nextUrl);
+          setPreviewError(null);
+        })
+        .catch((err: unknown) => {
+          if (controller.signal.aborted) return;
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+          const msg =
+            err instanceof ApiError
+              ? err.message
+              : 'No se pudo conectar con documentos-service para generar la vista previa.';
+          setPreviewError(msg);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setPreviewCargando(false);
+          }
+        });
+    }, delayMs);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [accionActiva, payloadPreviewJson, previewNonce]);
+
+  // Limpieza segura del object URL al desmontar la página
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = null;
+      }
+    };
+  }, []);
 
   if (cargando || !ficha) {
     return (
@@ -350,11 +848,6 @@ export default function ExpedienteDetallePage() {
       </div>
     );
   }
-
-  const tesistasActivos = ficha.tesistas.filter((t) => t.estado !== 'DESISTIDO');
-
-  const obtenerResolucionPorId = (resId: string | null) =>
-    resId ? resoluciones.find((r) => r.id === resId) || null : null;
 
   const estaVigenteYFirmada = (resId: string | null): boolean => {
     const r = obtenerResolucionPorId(resId);
@@ -368,42 +861,6 @@ export default function ExpedienteDetallePage() {
     (r) =>
       r.situacionJuridica === 'VIGENTE' && r.estadoDocumental === 'EMITIDO',
   );
-
-  // Resolver nombres vigentes consolidados desde docentesActivos con respaldo en snapshots de resoluciones
-  const resAsesorObj = obtenerResolucionPorId(ficha.asesorResolucionId);
-  const resDictObj = obtenerResolucionPorId(ficha.dictaminantesResolucionId);
-
-  const asesorActualNombre =
-    nombreDocentePorId(ficha.asesorDocenteId) ||
-    String(
-      resAsesorObj?.datosEspecificos?.asesorNombreCompletoSnapshot ||
-        resAsesorObj?.datosEspecificos?.nombreAsesor ||
-        '',
-    ) ||
-    null;
-
-  const dict1ActualNombre =
-    nombreDocentePorId(ficha.dictaminante1Id) ||
-    String(
-      resDictObj?.datosEspecificos?.dictaminante1Snapshot ||
-        resDictObj?.datosEspecificos?.nombreDictaminante1 ||
-        '',
-    ) ||
-    null;
-
-  const dict2ActualNombre =
-    nombreDocentePorId(ficha.dictaminante2Id) ||
-    String(
-      resDictObj?.datosEspecificos?.dictaminante2Snapshot ||
-        resDictObj?.datosEspecificos?.nombreDictaminante2 ||
-        '',
-    ) ||
-    null;
-
-  const dict3ActualNombre =
-    nombreDocentePorId(ficha.dictaminante3Id) ||
-    String(resDictObj?.datosEspecificos?.dictaminante3Snapshot || '') ||
-    null;
 
   const dictaminantesCongeladosPorPaso6 = Boolean(ficha.fechaHoraResolucionId);
   const expedienteEnProceso = ficha.estado === 'EN_PROCESO';
@@ -499,12 +956,14 @@ export default function ExpedienteDetallePage() {
       nombre: '4. Tercer Dictaminante (Obligatorio)',
       serie: 'ORD',
       completado: p4Firmado,
-      enEmitido: Boolean(ficha.dictaminante3Id) && !p4Firmado,
+      enEmitido:
+        (Boolean(ficha.dictaminante3Id) || Boolean(resTercerDictOrig)) && !p4Firmado,
       habilitado:
         puedeEmitir &&
         expedienteEnProceso &&
         p3Firmado &&
         !ficha.dictaminante3Id &&
+        !resTercerDictOrig &&
         sinFirmaPendiente,
       detalleEstado: !p3Firmado
         ? 'Bloqueado: Requiere Paso 3 en estado VIGENTE + FIRMADO.'
@@ -580,6 +1039,8 @@ export default function ExpedienteDetallePage() {
   const abrirFormulario = (tipo: TipoResolucionBackend) => {
     setErrorEmision(null);
     setDetalleCausaManual('');
+    limpiarPreview();
+    skipDebounceRef.current = true;
     setAccionActiva(tipo);
 
     const disponiblesSinAsesor = docentesEmbudo.filter(
@@ -595,8 +1056,11 @@ export default function ExpedienteDetallePage() {
         ].includes(d.docenteId),
     );
 
-    if (tipo === 'ASESOR' && docentesEmbudo.length > 0) {
-      setAsesorId(docentesEmbudo[0].docenteId);
+    if (tipo === 'ASESOR') {
+      if (docentesEmbudo.length > 0) {
+        setAsesorId(docentesEmbudo[0].docenteId);
+      }
+      setFechaCartaAceptacion(new Date().toISOString().slice(0, 10));
     }
     if (tipo === 'DICTAMEN' && disponiblesSinAsesor.length >= 2) {
       setDict1Id(disponiblesSinAsesor[0].docenteId);
@@ -658,6 +1122,23 @@ export default function ExpedienteDetallePage() {
       const c = causas.find((x) => x.ambito === 'DSE');
       if (c) setCausaIdSeleccionada(c.id);
     }
+
+    requestAnimationFrame(() => {
+      workspaceEmisionRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  };
+
+  const handleActualizarPreview = () => {
+    skipDebounceRef.current = true;
+    setPreviewNonce((n) => n + 1);
+  };
+
+  const handleAbrirPreviewEnPestana = () => {
+    if (!previewUrl) return;
+    window.open(previewUrl, '_blank', 'noopener,noreferrer');
   };
 
   const renderOpcionesEmbudo = (excluirIds: Array<string | null | undefined>) => {
@@ -716,17 +1197,6 @@ export default function ExpedienteDetallePage() {
     );
   };
 
-  const calcularMencionPreview = (nota: number) => {
-    if (nota < 14 || nota > 20) return 'BLOQUEADO (Nota debe ser entre 14 y 20)';
-    if (nota <= 16) return 'APROBADO';
-    if (nota <= 18) return 'APROBADO CON DISTINCIÓN';
-    return 'APROBADO CON DISTINCIÓN Y FELICITACIÓN PÚBLICA';
-  };
-
-  const causaSeleccionadaObj = causas.find(
-    (c) => c.id === Number(causaIdSeleccionada),
-  );
-
   // Construye y envía POST /resoluciones/emitir con CrearResolucionDto exacto
   const handleEjecutarEmision = async (e: FormEvent) => {
     e.preventDefault();
@@ -734,44 +1204,15 @@ export default function ExpedienteDetallePage() {
 
     setErrorEmision(null);
 
-    const baseSnapshots: Record<string, unknown> = {
-      escuelaProfesionalSnapshot: ficha.escuelaProfesional.nombre,
-      gradoBachillerSnapshot: ficha.escuelaProfesional.gradoBachiller,
-      tituloProfesionalSnapshot: ficha.escuelaProfesional.tituloProfesional,
-      departamentoAcademico:
-        departamentoDefectoActual?.nombre.replace(
-          'Departamento Académico de ',
-          '',
-        ) || ficha.escuelaProfesional.nombre,
-      tesistasSnapshot: tesistasActivos.map((t) => ({
-        nombresApellidos: t.persona.nombreCompleto,
-        codigoEstudiante: t.persona.codigoUniversitario || '',
-      })),
-    };
-
-    const causaTextoConsolidado = causaSeleccionadaObj
-      ? detalleCausaManual.trim()
-        ? `${causaSeleccionadaObj.descripcion}: ${detalleCausaManual.trim()}`
-        : causaSeleccionadaObj.descripcion
-      : detalleCausaManual.trim();
-
-    const dto: CrearResolucionDtoPayload = {
-      expedienteId: ficha.id,
-      tipo: accionActiva,
-      datosEspecificos: { ...baseSnapshots },
-    };
-
     if (accionActiva === 'ASESOR') {
       if (!asesorId) {
         toast.error('Seleccione un Docente Asesor.');
         return;
       }
-      dto.serie = 'ORD';
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        asesorDocenteId: asesorId,
-        asesorNombreCompletoSnapshot: nombreDocentePorId(asesorId),
-      };
+      if (!fechaCartaAceptacion) {
+        toast.error('Ingrese la fecha de la carta de aceptación del asesor.');
+        return;
+      }
     } else if (accionActiva === 'DICTAMEN') {
       if (!tituloProyecto.trim() || !dict1Id || !dict2Id || dict1Id === dict2Id) {
         toast.error(
@@ -779,52 +1220,11 @@ export default function ExpedienteDetallePage() {
         );
         return;
       }
-      dto.serie = 'ORD';
-      if (ficha.asesorResolucionId) {
-        dto.resolucionAntecedenteId = ficha.asesorResolucionId;
-      }
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        tituloTesis: tituloProyecto.trim(),
-        tituloProyecto: tituloProyecto.trim(),
-        tituloVigenteSnapshot: tituloProyecto.trim(),
-        departamentoAcademicoId: escuelaCatalogoActual?.departamentoDefectoId,
-        dictaminante1Id: dict1Id,
-        dictaminante2Id: dict2Id,
-        dictaminante1Snapshot: nombreDocentePorId(dict1Id),
-        dictaminante2Snapshot: nombreDocentePorId(dict2Id),
-      };
-    } else if (accionActiva === 'INSCRIPCION') {
-      dto.serie = 'ORD';
-      if (ficha.dictaminantesResolucionId) {
-        dto.resolucionAntecedenteId = ficha.dictaminantesResolucionId;
-      }
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        tituloInscritoSnapshot: ficha.tituloActual || '',
-        tituloProyecto: ficha.tituloActual || '',
-        resolucionDictamenNumeroSnapshot: resDictObj?.numeroCompleto || '',
-        fechaResolucionDictamenSnapshot: resDictObj?.fechaEmision || '',
-      };
     } else if (accionActiva === 'TERCER_DICT') {
       if (!dict3Id) {
         toast.error('Seleccione el Tercer Dictaminante.');
         return;
       }
-      dto.serie = 'ORD';
-      if (ficha.inscripcionResolucionId) {
-        dto.resolucionAntecedenteId = ficha.inscripcionResolucionId;
-      }
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        tituloVigenteSnapshot: ficha.tituloActual || '',
-        dictaminante1Id: ficha.dictaminante1Id,
-        dictaminante2Id: ficha.dictaminante2Id,
-        dictaminante3Id: dict3Id,
-        dictaminante1Snapshot: dict1ActualNombre || '',
-        dictaminante2Snapshot: dict2ActualNombre || '',
-        dictaminante3Snapshot: nombreDocentePorId(dict3Id),
-      };
     } else if (accionActiva === 'APTO') {
       const tesistaObj = tesistasActivos.find(
         (t) => t.id === tesistaSeleccionadoId,
@@ -833,17 +1233,6 @@ export default function ExpedienteDetallePage() {
         toast.error('Seleccione el tesista a declarar Apto.');
         return;
       }
-      dto.serie = 'CF';
-      dto.tesistaId = tesistaObj.id;
-      if (ficha.dictaminantesResolucionId) {
-        dto.resolucionAntecedenteId = ficha.dictaminantesResolucionId;
-      }
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        tesistaNombresSnapshot: tesistaObj.persona.nombreCompleto,
-        numeroInformeSecretariaSnapshot: numInformeSec.trim(),
-        fechaInformeSecretariaSnapshot: fechaInformeSec,
-      };
     } else if (accionActiva === 'FECHA_HORA') {
       if (
         !presidenteId ||
@@ -856,25 +1245,6 @@ export default function ExpedienteDetallePage() {
         );
         return;
       }
-      dto.serie = 'ORD';
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        tituloVigenteSnapshot: ficha.tituloActual || '',
-        presidenteDocenteId: presidenteId,
-        secretarioDocenteId: secretarioId,
-        vocalDocenteId: vocalId,
-        fechaSustentacion: fechaSustProgramada,
-        horaSustentacion: horaSustProgramada,
-        modalidad: modalidadSust,
-        lugarReferencia: lugarSust.trim(),
-        asesorNombreCompletoSnapshot: asesorActualNombre || '',
-        juradoSnapshot: {
-          presidente: nombreDocentePorId(presidenteId) || dict1ActualNombre || '',
-          secretario: nombreDocentePorId(secretarioId) || dict2ActualNombre || '',
-          dictaminante: nombreDocentePorId(vocalId) || dict3ActualNombre || '',
-          asesor: asesorActualNombre || '',
-        },
-      };
     } else if (accionActiva === 'TITULO') {
       const tesistaObj = tesistasActivos.find(
         (t) => t.id === tesistaSeleccionadoId,
@@ -887,87 +1257,21 @@ export default function ExpedienteDetallePage() {
         toast.error('La nota entera debe estar entre 14 y 20.');
         return;
       }
-      dto.serie = 'CF';
-      dto.tesistaId = tesistaObj.id;
-      if (ficha.fechaHoraResolucionId) {
-        dto.resolucionAntecedenteId = ficha.fechaHoraResolucionId;
-      }
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        tesistaNombresSnapshot: tesistaObj.persona.nombreCompleto,
-        notaSustentacion: Number(notaSust),
-        resultadoSustentacion: calcularMencionPreview(Number(notaSust)),
-        fechaSustentacionReal: fechaSustReal,
-      };
     } else if (accionActiva === 'CAMBIO_ASESOR') {
       if (!asesorId) {
         toast.error('Seleccione el nuevo Docente Asesor.');
         return;
       }
-      dto.serie = 'ORD';
-      if (ficha.asesorResolucionId) {
-        dto.resolucionAntecedenteId = ficha.asesorResolucionId;
-      }
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        asesorDocenteId: asesorId,
-        asesorNombreCompletoSnapshot: nombreDocentePorId(asesorId),
-        asesorSalienteSnapshot: asesorActualNombre || '',
-        causaId: Number(causaIdSeleccionada) || undefined,
-        causaTextoConsolidadoSnapshot: causaTextoConsolidado,
-        resolucionAntecedenteNumeroSnapshot: resAsesorObj?.numeroCompleto || '',
-        fechaResolucionAntecedenteSnapshot: resAsesorObj?.fechaEmision || '',
-      };
     } else if (accionActiva === 'CAMBIO_TITULO') {
       if (!tituloProyecto.trim()) {
         toast.error('Ingrese el nuevo título de la tesis.');
         return;
       }
-      const resTituloPrev =
-        obtenerResolucionPorId(ficha.tituloResolucionId) || resDictObj;
-      dto.serie = 'ORD';
-      if (resTituloPrev) {
-        dto.resolucionAntecedenteId = resTituloPrev.id;
-      }
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        nuevoTitulo: tituloProyecto.trim(),
-        tituloTesis: tituloProyecto.trim(),
-        diceTituloAnterior: ficha.tituloActual || '',
-        debeDecirNuevoTitulo: tituloProyecto.trim(),
-        resolucionAntecedenteNumeroSnapshot: resTituloPrev?.numeroCompleto || '',
-        fechaResolucionAntecedenteSnapshot: resTituloPrev?.fechaEmision || '',
-      };
     } else if (accionActiva === 'CAMBIO_DICTAMINANTE') {
       if (!dictSalienteId || !dictEntranteId) {
         toast.error('Seleccione el dictaminante saliente y el entrante.');
         return;
       }
-      dto.serie = 'ORD';
-      if (ficha.dictaminantesResolucionId) {
-        dto.resolucionAntecedenteId = ficha.dictaminantesResolucionId;
-      }
-      const slotActualizado: Record<string, string> = {};
-      if (dictSalienteId === ficha.dictaminante1Id) {
-        slotActualizado.dictaminante1Id = dictEntranteId;
-      } else if (dictSalienteId === ficha.dictaminante2Id) {
-        slotActualizado.dictaminante2Id = dictEntranteId;
-      } else if (dictSalienteId === ficha.dictaminante3Id) {
-        slotActualizado.dictaminante3Id = dictEntranteId;
-      }
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        ...slotActualizado,
-        dictaminanteSalienteId: dictSalienteId,
-        dictaminanteEntranteId: dictEntranteId,
-        dictaminanteSalienteSnapshot: nombreDocentePorId(dictSalienteId),
-        dictaminanteEntranteSnapshot: nombreDocentePorId(dictEntranteId),
-        causaId: Number(causaIdSeleccionada) || undefined,
-        causaTextoConsolidadoSnapshot: causaTextoConsolidado,
-        tituloVigenteSnapshot: ficha.tituloActual || '',
-        resolucionAntecedenteNumeroSnapshot: resDictObj?.numeroCompleto || '',
-        fechaResolucionAntecedente: resDictObj?.fechaEmision || '',
-      };
     } else if (accionActiva === 'DESISTIMIENTO') {
       const desistente = tesistasActivos.find(
         (t) => t.id === tesistaSeleccionadoId,
@@ -976,45 +1280,26 @@ export default function ExpedienteDetallePage() {
         toast.error('Seleccione el tesista desistente.');
         return;
       }
-      const continua = tesistasActivos.find((t) => t.id !== desistente.id);
-      dto.serie = 'ORD';
-      dto.tesistaId = desistente.id;
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        tesistaDesistenteId: desistente.id,
-        tesistaDesistenteNombresSnapshot: desistente.persona.nombreCompleto,
-        tesistaContinuaNombresSnapshot: continua?.persona.nombreCompleto || '',
-        referenciaSolicitudExterna: refSolicitudDesistimiento.trim(),
-        ...(fundamentoDesistimiento.trim()
-          ? { fundamentoSolicitud: fundamentoDesistimiento.trim() }
-          : {}),
-        resolucionAsesorNumeroSnapshot: resAsesorObj?.numeroCompleto || '',
-        fechaResolucionAsesorSnapshot: resAsesorObj?.fechaEmision || '',
-        resolucionDictamenNumeroSnapshot: resDictObj?.numeroCompleto || '',
-        fechaResolucionDictamenSnapshot: resDictObj?.fechaEmision || '',
-      };
     } else if (accionActiva === 'DSE') {
       if (idsAfectadosDse.length === 0) {
         toast.error('Seleccione al menos una resolución vigente a dejar sin efecto.');
         return;
       }
-      const afectadasObjs = resoluciones.filter((r) =>
-        idsAfectadosDse.includes(r.id),
-      );
-      dto.serie = serieDse;
-      dto.datosEspecificos = {
-        ...baseSnapshots,
-        resolucionesAfectadasIds: idsAfectadosDse,
-        resolucionesAfectadasSnapshot: afectadasObjs.map((r) => ({
-          numeroCompleto: r.numeroCompleto,
-          fechaEmision: r.fechaEmision,
-          tipo: r.tipo,
-        })),
-        causaId: Number(causaIdSeleccionada) || undefined,
-        causaTextoConsolidadoSnapshot: causaTextoConsolidado,
-        reinicioIntegral: reinicioIntegralDse,
-      };
     }
+
+    const payload = construirPayloadEmision();
+    if (!payload) return;
+
+    const dto: CrearResolucionDtoPayload = {
+      expedienteId: payload.expedienteId,
+      tipo: payload.tipo,
+      ...(payload.serie ? { serie: payload.serie } : {}),
+      ...(payload.tesistaId ? { tesistaId: payload.tesistaId } : {}),
+      ...(payload.resolucionAntecedenteId
+        ? { resolucionAntecedenteId: payload.resolucionAntecedenteId }
+        : {}),
+      datosEspecificos: payload.datosEspecificos,
+    };
 
     setProcesandoAccion(true);
     try {
@@ -1033,6 +1318,7 @@ export default function ExpedienteDetallePage() {
       );
       setAccionActiva(null);
       setErrorEmision(null);
+      limpiarPreview();
       await cargarTodo();
     } catch (err) {
       const msg =
@@ -1231,13 +1517,877 @@ export default function ExpedienteDetallePage() {
       )}
 
       {/* =================================================================== */}
-      {/* GRILLA PRINCIPAL: IZQUIERDA (7 PASOS + DATOS) | DERECHA (FORMULARIO)*/}
+      {/* ESPACIO ACTIVO DE EMISIÓN + VISTA PREVIA DEL PDF EN VIVO            */}
+      {/* =================================================================== */}
+      {accionActiva && (
+        <div
+          ref={workspaceEmisionRef}
+          className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start scroll-mt-20"
+        >
+          {/* COLUMNA IZQUIERDA (5 Columnas): FORMULARIO ACTIVO */}
+          <div className="xl:col-span-5 bg-white rounded-2xl border border-blue-200 p-5 shadow-sm">
+            <form onSubmit={handleEjecutarEmision} className="space-y-4 text-xs">
+              <div className="flex items-center justify-between border-b border-gray-200 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-[#1E73BE]">
+                    Formulario de Emisión: {accionActiva.replaceAll('_', ' ')}
+                  </h3>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Complete los campos y verifique el borrador en tiempo real.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccionActiva(null);
+                    setErrorEmision(null);
+                    limpiarPreview();
+                  }}
+                  className="text-gray-400 hover:text-gray-600 text-xs font-bold shrink-0 ml-2"
+                >
+                  ✕ Cerrar
+                </button>
+              </div>
+
+              {/* Mensaje de error del backend (ej. bloqueo por firma digital pendiente) */}
+              {errorEmision && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <p className="font-semibold text-[11px] leading-relaxed">
+                      {errorEmision}
+                    </p>
+                  </div>
+                  {errorEmision.toLowerCase().includes('firma') && (
+                    <Link
+                      href="/dashboard/firmas"
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1E73BE] hover:underline"
+                    >
+                      <FileSignature className="w-3.5 h-3.5" />
+                      <span>Ir al módulo de Firma Digital y Validación</span>
+                    </Link>
+                  )}
+                </div>
+              )}
+
+              {/* PASO 1: NOMBRAMIENTO DE ASESOR */}
+              {accionActiva === 'ASESOR' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Seleccionar Docente Asesor (Embudo de 3 Niveles):
+                    </label>
+                    <select
+                      value={asesorId}
+                      onChange={(e) => setAsesorId(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 p-2.5 text-xs bg-white"
+                    >
+                      {renderOpcionesEmbudo([])}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Fecha de Carta de Aceptación del Asesor *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={fechaCartaAceptacion}
+                      onChange={(e) => setFechaCartaAceptacion(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* PASO 2: DICTAMEN DE PROYECTO */}
+              {accionActiva === 'DICTAMEN' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Título Oficial del Proyecto de Tesis:
+                    </label>
+                    <textarea
+                      rows={3}
+                      required
+                      value={tituloProyecto}
+                      onChange={(e) => setTituloProyecto(e.target.value)}
+                      placeholder="Ingrese el título completo del proyecto de tesis..."
+                      className="w-full rounded-lg border border-gray-300 p-2.5 text-xs uppercase"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Dictaminante 1 (Excluye automáticamente al Asesor):
+                    </label>
+                    <select
+                      value={dict1Id}
+                      onChange={(e) => setDict1Id(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {renderOpcionesEmbudo([ficha.asesorDocenteId])}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Dictaminante 2 (Excluye Asesor y Dictaminante 1):
+                    </label>
+                    <select
+                      value={dict2Id}
+                      onChange={(e) => setDict2Id(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {renderOpcionesEmbudo([ficha.asesorDocenteId, dict1Id])}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* PASO 3: INSCRIPCIÓN DE PROYECTO */}
+              {accionActiva === 'INSCRIPCION' && (
+                <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 space-y-1.5">
+                  <p className="font-bold text-[#1E73BE]">
+                    Emisión de Resolución de Inscripción de Proyecto
+                  </p>
+                  <p className="text-gray-700">
+                    <b>Título a inscribir:</b> {ficha.tituloActual}
+                  </p>
+                  <p className="text-[11px] text-gray-600">
+                    Al confirmar, el sistema asignará un número correlativo ORD para la{' '}
+                    <b>{ficha.escuelaProfesional.nombre}</b>.
+                  </p>
+                </div>
+              )}
+
+              {/* PASO 4: TERCER DICTAMINANTE */}
+              {accionActiva === 'TERCER_DICT' && (
+                <div className="space-y-3">
+                  <label className="block font-bold text-gray-700">
+                    Seleccionar Tercer Dictaminante (Excluye Asesor y D1/D2):
+                  </label>
+                  <select
+                    value={dict3Id}
+                    onChange={(e) => setDict3Id(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 p-2.5 text-xs bg-white"
+                  >
+                    {renderOpcionesEmbudo([
+                      ficha.asesorDocenteId,
+                      ficha.dictaminante1Id,
+                      ficha.dictaminante2Id,
+                    ])}
+                  </select>
+                </div>
+              )}
+
+              {/* PASO 5: APTO PARA TÍTULO PROFESIONAL (CF) */}
+              {accionActiva === 'APTO' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Tesista Activo a Declarar Apto (Individual Serie CF):
+                    </label>
+                    <select
+                      value={tesistaSeleccionadoId}
+                      onChange={(e) =>
+                        setTesistaSeleccionadoId(e.target.value)
+                      }
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {tesistasActivos
+                        .filter((t) => !t.aptoResolucionId)
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.persona.nombreCompleto} (
+                            {t.persona.codigoUniversitario || 'S/C'})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      N.° de Informe de Secretaría Académica:
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={numInformeSec}
+                      onChange={(e) => setNumInformeSec(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs uppercase"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Fecha del Informe:
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={fechaInformeSec}
+                      onChange={(e) => setFechaInformeSec(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* PASO 6: FECHA Y HORA DE SUSTENTACIÓN */}
+              {accionActiva === 'FECHA_HORA' && (
+                <div className="space-y-3">
+                  <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
+                    Distribuya los 3 Dictaminantes vigentes en los cargos de Presidente, Secretario y Vocal. El Asesor (
+                    <b>{asesorActualNombre || 'Asesor'}</b>) se integra automáticamente como 4.° miembro.
+                  </div>
+                  <div className="grid grid-cols-1 gap-2">
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Presidente del Jurado:
+                      </label>
+                      <select
+                        value={presidenteId}
+                        onChange={(e) => setPresidenteId(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                      >
+                        {ternaVigentesOpciones.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.nombre}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Secretario del Jurado:
+                      </label>
+                      <select
+                        value={secretarioId}
+                        onChange={(e) => setSecretarioId(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                      >
+                        {ternaVigentesOpciones.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.nombre}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Vocal / Dictaminante:
+                      </label>
+                      <select
+                        value={vocalId}
+                        onChange={(e) => setVocalId(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                      >
+                        {ternaVigentesOpciones.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.nombre}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Fecha Programada:
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={fechaSustProgramada}
+                        onChange={(e) =>
+                          setFechaSustProgramada(e.target.value)
+                        }
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Hora (24h HH:mm):
+                      </label>
+                      <input
+                        type="time"
+                        required
+                        value={horaSustProgramada}
+                        onChange={(e) =>
+                          setHoraSustProgramada(e.target.value)
+                        }
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Modalidad:
+                      </label>
+                      <select
+                        value={modalidadSust}
+                        onChange={(e) =>
+                          setModalidadSust(
+                            e.target.value as 'PRESENCIAL' | 'VIRTUAL',
+                          )
+                        }
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                      >
+                        <option value="PRESENCIAL">PRESENCIAL</option>
+                        <option value="VIRTUAL">VIRTUAL</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Lugar / Referencia:
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={lugarSust}
+                        onChange={(e) => setLugarSust(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* PASO 7: TÍTULO PROFESIONAL (CF) */}
+              {accionActiva === 'TITULO' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Tesista que Aprobó la Sustentación:
+                    </label>
+                    <select
+                      value={tesistaSeleccionadoId}
+                      onChange={(e) =>
+                        setTesistaSeleccionadoId(e.target.value)
+                      }
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {tesistasActivos
+                        .filter((t) => !t.tituloResolucionId)
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.persona.nombreCompleto} (
+                            {t.persona.codigoUniversitario || 'S/C'})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Nota Entera (14 a 20):
+                      </label>
+                      <input
+                        type="number"
+                        min={14}
+                        max={20}
+                        step={1}
+                        required
+                        value={notaSust}
+                        onChange={(e) => setNotaSust(Number(e.target.value))}
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Fecha Real Sustentación:
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={fechaSustReal}
+                        onChange={(e) => setFechaSustReal(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
+                    <span className="text-[10px] font-bold uppercase text-gray-500 block">
+                      Mención Calculada Automáticamente:
+                    </span>
+                    <span className="font-extrabold text-[#1E73BE] text-xs">
+                      {calcularMencionPreview(notaSust)}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* COMPLEMENTARIA 1: CAMBIO DE ASESOR */}
+              {accionActiva === 'CAMBIO_ASESOR' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Nuevo Docente Asesor (Excluye Asesor actual y Dictaminantes):
+                    </label>
+                    <select
+                      value={asesorId}
+                      onChange={(e) => setAsesorId(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {renderOpcionesEmbudo([
+                        ficha.asesorDocenteId,
+                        ficha.dictaminante1Id,
+                        ficha.dictaminante2Id,
+                        ficha.dictaminante3Id,
+                      ])}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Causa Oficial del Cambio:
+                    </label>
+                    <select
+                      value={causaIdSeleccionada}
+                      onChange={(e) =>
+                        setCausaIdSeleccionada(Number(e.target.value))
+                      }
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {causas
+                        .filter((c) => c.ambito === 'CAMBIO_ASESOR')
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.descripcion}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  {causaSeleccionadaObj?.requiereDetalleManual && (
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Especificar Detalle Manual de la Causa:
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={detalleCausaManual}
+                        onChange={(e) =>
+                          setDetalleCausaManual(e.target.value)
+                        }
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* COMPLEMENTARIA 2: CAMBIO DE TÍTULO (DICE / DEBE DECIR) */}
+              {accionActiva === 'CAMBIO_TITULO' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-bold text-gray-500 mb-1">
+                      DICE (Título Vigente Actual):
+                    </label>
+                    <textarea
+                      rows={2}
+                      readOnly
+                      value={ficha.tituloActual || ''}
+                      className="w-full rounded-lg border border-gray-200 bg-gray-100 p-2 text-xs text-gray-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-[#1E73BE] mb-1">
+                      DEBE DECIR (Nuevo Título Modificado):
+                    </label>
+                    <textarea
+                      rows={3}
+                      required
+                      value={tituloProyecto}
+                      onChange={(e) => setTituloProyecto(e.target.value)}
+                      className="w-full rounded-lg border border-blue-400 p-2 text-xs uppercase"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* COMPLEMENTARIA 3: CAMBIO DE DICTAMINANTE */}
+              {accionActiva === 'CAMBIO_DICTAMINANTE' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Dictaminante Vigente que Sale:
+                    </label>
+                    <select
+                      value={dictSalienteId}
+                      onChange={(e) => setDictSalienteId(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {ternaVigentesOpciones.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Nuevo Docente Dictaminante Entrante:
+                    </label>
+                    <select
+                      value={dictEntranteId}
+                      onChange={(e) => setDictEntranteId(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {renderOpcionesEmbudo([
+                        ficha.asesorDocenteId,
+                        ficha.dictaminante1Id,
+                        ficha.dictaminante2Id,
+                        ficha.dictaminante3Id,
+                      ])}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Causa Oficial del Reemplazo:
+                    </label>
+                    <select
+                      value={causaIdSeleccionada}
+                      onChange={(e) =>
+                        setCausaIdSeleccionada(Number(e.target.value))
+                      }
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {causas
+                        .filter((c) => c.ambito === 'CAMBIO_DICTAMINANTE')
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.descripcion}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  {causaSeleccionadaObj?.requiereDetalleManual && (
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Especificar Detalle Manual de la Causa:
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={detalleCausaManual}
+                        onChange={(e) =>
+                          setDetalleCausaManual(e.target.value)
+                        }
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* COMPLEMENTARIA 4: DESISTIMIENTO */}
+              {accionActiva === 'DESISTIMIENTO' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Tesista que Presenta el Desistimiento:
+                    </label>
+                    <select
+                      value={tesistaSeleccionadoId}
+                      onChange={(e) =>
+                        setTesistaSeleccionadoId(e.target.value)
+                      }
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {tesistasActivos.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.persona.nombreCompleto} (
+                          {t.persona.codigoUniversitario || 'S/C'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Referencia de Solicitud Externa:
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={refSolicitudDesistimiento}
+                      onChange={(e) =>
+                        setRefSolicitudDesistimiento(e.target.value)
+                      }
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs uppercase"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Fundamento / Observación (Opcional):
+                    </label>
+                    <input
+                      type="text"
+                      value={fundamentoDesistimiento}
+                      onChange={(e) =>
+                        setFundamentoDesistimiento(e.target.value)
+                      }
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* COMPLEMENTARIA 5: DEJAR SIN EFECTO (DSE) */}
+              {accionActiva === 'DSE' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Serie de la Resolución DSE:
+                    </label>
+                    <select
+                      value={serieDse}
+                      onChange={(e) =>
+                        setSerieDse(e.target.value as 'ORD' | 'CF')
+                      }
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      <option value="ORD">ORDINARIA (ORD)</option>
+                      <option value="CF">CONSEJO DE FACULTAD (CF)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Seleccionar Resolución(es) VIGENTES a Dejar Sin Efecto:
+                    </label>
+                    <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-lg p-2 space-y-1.5 bg-gray-50">
+                      {resoluciones
+                        .filter(
+                          (r) =>
+                            r.situacionJuridica === 'VIGENTE' &&
+                            r.tipo !== 'DSE',
+                        )
+                        .map((r) => (
+                          <label
+                            key={r.id}
+                            className="flex items-center gap-2 text-xs cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={idsAfectadosDse.includes(r.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setIdsAfectadosDse((prev) => [
+                                    ...prev,
+                                    r.id,
+                                  ]);
+                                } else {
+                                  setIdsAfectadosDse((prev) =>
+                                    prev.filter((id) => id !== r.id),
+                                  );
+                                }
+                              }}
+                            />
+                            <span className="font-mono font-bold">
+                              {r.numeroCompleto}
+                            </span>
+                            <span className="text-gray-600">— {r.tipo}</span>
+                          </label>
+                        ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      Causa del DSE:
+                    </label>
+                    <select
+                      value={causaIdSeleccionada}
+                      onChange={(e) =>
+                        setCausaIdSeleccionada(Number(e.target.value))
+                      }
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    >
+                      {causas
+                        .filter((c) => c.ambito === 'DSE')
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.descripcion}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  {causaSeleccionadaObj?.requiereDetalleManual && (
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        Especificar Detalle Manual de la Causa:
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={detalleCausaManual}
+                        onChange={(e) =>
+                          setDetalleCausaManual(e.target.value)
+                        }
+                        className="w-full rounded-lg border border-gray-300 p-2 text-xs"
+                      />
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900 font-bold cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={reinicioIntegralDse}
+                      onChange={(e) =>
+                        setReinicioIntegralDse(e.target.checked)
+                      }
+                    />
+                    <span>
+                      Marcar Reinicio Integral en los datos de la resolución DSE
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={procesandoAccion}
+                className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#1E73BE] py-2.5 px-4 text-xs font-bold text-white shadow hover:bg-[#175B96] disabled:opacity-60 transition"
+              >
+                {procesandoAccion ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Emitiendo Resolución...</span>
+                  </>
+                ) : (
+                  <span>Confirmar Emisión y Asignar Número Oficial</span>
+                )}
+              </button>
+            </form>
+          </div>
+
+          {/* COLUMNA DERECHA (7 Columnas): VISTA PREVIA PDF EN VIVO */}
+          <div className="xl:col-span-7 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden xl:sticky xl:top-20">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 border-b border-gray-200 bg-gray-50/80">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-[#1E73BE] shrink-0">
+                  <Eye className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xs font-extrabold text-gray-900">
+                      Vista Previa del PDF (En vivo)
+                    </h3>
+                    {previewCargando ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-[#1E73BE]">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <span>Generando...</span>
+                      </span>
+                    ) : previewUrl && !previewError ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
+                        <span>Sincronizado</span>
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-[11px] text-gray-500 truncate">
+                    Borrador A4 — {accionActiva.replaceAll('_', ' ')} ({ficha.codigoExpediente})
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleActualizarPreview}
+                  disabled={previewCargando}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-100 text-gray-700 text-[11px] font-semibold disabled:opacity-50 transition"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${previewCargando ? 'animate-spin' : ''}`}
+                  />
+                  <span>Actualizar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAbrirPreviewEnPestana}
+                  disabled={!previewUrl}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#1E73BE] hover:bg-[#175B96] text-white text-[11px] font-semibold disabled:opacity-40 transition"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Abrir PDF en pestaña</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="relative h-[680px] xl:h-[780px] bg-slate-100">
+              {previewError ? (
+                <div className="h-full flex flex-col items-center justify-center p-8 text-center space-y-3">
+                  <div className="w-11 h-11 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div className="space-y-1 max-w-md">
+                    <p className="text-xs font-bold text-gray-900">
+                      Vista previa en vivo no disponible por el momento
+                    </p>
+                    <p className="text-[11px] text-rose-700 font-medium">
+                      {previewError}
+                    </p>
+                    <p className="text-[11px] text-gray-500 leading-relaxed pt-1">
+                      Si acaba de actualizar el backend, reinicie{' '}
+                      <span className="font-mono font-semibold text-gray-700">
+                        documentos-service
+                      </span>{' '}
+                      y vuelva a intentar. Puede continuar completando el formulario con normalidad.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleActualizarPreview}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#1E73BE] hover:bg-[#175B96] text-white text-xs font-bold shadow-xs transition"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Reintentar vista previa</span>
+                  </button>
+                </div>
+              ) : previewUrl ? (
+                <>
+                  <iframe
+                    src={`${previewUrl}#toolbar=1&navpanes=0`}
+                    title="Vista previa del PDF de la resolución en vivo"
+                    className="w-full h-full border-0 bg-white"
+                  />
+                  {previewCargando && (
+                    <div className="absolute top-3 right-3 inline-flex items-center gap-1.5 rounded-full bg-white/95 border border-blue-200 px-3 py-1.5 text-[11px] font-bold text-[#1E73BE] shadow-sm backdrop-blur-xs">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Actualizando borrador...</span>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center p-8 text-center space-y-2.5">
+                  <Loader2 className="w-7 h-7 text-[#1E73BE] animate-spin" />
+                  <p className="text-xs font-bold text-gray-800">
+                    Generando vista previa A4 en vivo...
+                  </p>
+                  <p className="text-[11px] text-gray-500 max-w-xs">
+                    El documento borrador se actualiza automáticamente al modificar cualquier campo del formulario.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* GRILLA PRINCIPAL: IZQUIERDA (7 PASOS + DATOS) | DERECHA (ASISTENTE) */}
       {/* =================================================================== */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-        {/* COLUMNA IZQUIERDA (7 Columnas) */}
-        <div className="xl:col-span-7 space-y-6">
+        {/* COLUMNA DE DATOS Y 7 PASOS */}
+        <div
+          className={
+            accionActiva
+              ? 'xl:col-span-12 grid grid-cols-1 xl:grid-cols-12 gap-6 items-start'
+              : 'xl:col-span-7 space-y-6'
+          }
+        >
           {/* 1. Punteros Consolidados Vigentes del Expediente */}
-          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-4">
+          <div
+            className={`bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-4 ${
+              accionActiva ? 'xl:col-span-5' : ''
+            }`}
+          >
             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
               <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
                 Información Vigente Consolidada del Expediente
@@ -1416,7 +2566,11 @@ export default function ExpedienteDetallePage() {
           </div>
 
           {/* 2. Flujo Secuencial de los 7 Pasos */}
-          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-3">
+          <div
+            className={`bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-3 ${
+              accionActiva ? 'xl:col-span-7' : ''
+            }`}
+          >
             <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
               Flujo Secuencial Obligatorio (7 Pasos de Titulación)
             </h3>
@@ -1502,732 +2656,23 @@ export default function ExpedienteDetallePage() {
         </div>
 
         {/* =================================================================== */}
-        {/* COLUMNA DERECHA (5 Columnas): PANEL DE EMISIÓN Y FORMULARIO ACTIVO  */}
+        {/* COLUMNA DERECHA (5 Columnas): ASISTENTE EN ESPERA (SI NO HAY FORM)  */}
         {/* =================================================================== */}
-        <div className="xl:col-span-5 space-y-6">
-          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm sticky top-20">
-            {!accionActiva ? (
+        {!accionActiva && (
+          <div className="xl:col-span-5 space-y-6">
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm sticky top-20">
               <div className="py-12 text-center space-y-2">
                 <Sparkles className="w-8 h-8 text-[#1E73BE] mx-auto opacity-70" />
                 <h3 className="text-sm font-bold text-gray-900">
                   Asistente de Emisión de Resoluciones
                 </h3>
                 <p className="text-xs text-gray-500 max-w-sm mx-auto">
-                  Seleccione el botón <b>&quot;Preparar Paso&quot;</b> en la línea de progreso o cualquiera de las <b>Resoluciones Complementarias</b> para abrir su formulario validado.
+                  Seleccione el botón <b>&quot;Preparar Paso&quot;</b> en la línea de progreso o cualquiera de las <b>Resoluciones Complementarias</b> para abrir su formulario validado junto a la vista previa del PDF en vivo.
                 </p>
               </div>
-            ) : (
-              <form onSubmit={handleEjecutarEmision} className="space-y-4 text-xs">
-                <div className="flex items-center justify-between border-b border-gray-200 pb-3">
-                  <h3 className="text-sm font-bold text-[#1E73BE]">
-                    Formulario de Emisión: {accionActiva.replace('_', ' ')}
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAccionActiva(null);
-                      setErrorEmision(null);
-                    }}
-                    className="text-gray-400 hover:text-gray-600 text-xs font-bold"
-                  >
-                    ✕ Cerrar
-                  </button>
-                </div>
-
-                {/* Mensaje de error del backend (ej. bloqueo por firma digital pendiente) */}
-                {errorEmision && (
-                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 space-y-2">
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                      <p className="font-semibold text-[11px] leading-relaxed">
-                        {errorEmision}
-                      </p>
-                    </div>
-                    {errorEmision.toLowerCase().includes('firma') && (
-                      <Link
-                        href="/dashboard/firmas"
-                        className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1E73BE] hover:underline"
-                      >
-                        <FileSignature className="w-3.5 h-3.5" />
-                        <span>Ir al módulo de Firma Digital y Validación</span>
-                      </Link>
-                    )}
-                  </div>
-                )}
-
-                {/* PASO 1: NOMBRAMIENTO DE ASESOR */}
-                {accionActiva === 'ASESOR' && (
-                  <div className="space-y-3">
-                    <label className="block font-bold text-gray-700">
-                      Seleccionar Docente Asesor (Embudo de 3 Niveles):
-                    </label>
-                    <select
-                      value={asesorId}
-                      onChange={(e) => setAsesorId(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 p-2.5 text-xs bg-white"
-                    >
-                      {renderOpcionesEmbudo([])}
-                    </select>
-                  </div>
-                )}
-
-                {/* PASO 2: DICTAMEN DE PROYECTO */}
-                {accionActiva === 'DICTAMEN' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Título Oficial del Proyecto de Tesis:
-                      </label>
-                      <textarea
-                        rows={3}
-                        required
-                        value={tituloProyecto}
-                        onChange={(e) => setTituloProyecto(e.target.value)}
-                        placeholder="Ingrese el título completo del proyecto de tesis..."
-                        className="w-full rounded-lg border border-gray-300 p-2.5 text-xs uppercase"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Dictaminante 1 (Excluye automáticamente al Asesor):
-                      </label>
-                      <select
-                        value={dict1Id}
-                        onChange={(e) => setDict1Id(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {renderOpcionesEmbudo([ficha.asesorDocenteId])}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Dictaminante 2 (Excluye Asesor y Dictaminante 1):
-                      </label>
-                      <select
-                        value={dict2Id}
-                        onChange={(e) => setDict2Id(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {renderOpcionesEmbudo([ficha.asesorDocenteId, dict1Id])}
-                      </select>
-                    </div>
-                  </div>
-                )}
-
-                {/* PASO 3: INSCRIPCIÓN DE PROYECTO */}
-                {accionActiva === 'INSCRIPCION' && (
-                  <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 space-y-1.5">
-                    <p className="font-bold text-[#1E73BE]">
-                      Emisión de Resolución de Inscripción de Proyecto
-                    </p>
-                    <p className="text-gray-700">
-                      <b>Título a inscribir:</b> {ficha.tituloActual}
-                    </p>
-                    <p className="text-[11px] text-gray-600">
-                      Al confirmar, el sistema asignará un número correlativo ORD para la{' '}
-                      <b>{ficha.escuelaProfesional.nombre}</b>.
-                    </p>
-                  </div>
-                )}
-
-                {/* PASO 4: TERCER DICTAMINANTE */}
-                {accionActiva === 'TERCER_DICT' && (
-                  <div className="space-y-3">
-                    <label className="block font-bold text-gray-700">
-                      Seleccionar Tercer Dictaminante (Excluye Asesor y D1/D2):
-                    </label>
-                    <select
-                      value={dict3Id}
-                      onChange={(e) => setDict3Id(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 p-2.5 text-xs bg-white"
-                    >
-                      {renderOpcionesEmbudo([
-                        ficha.asesorDocenteId,
-                        ficha.dictaminante1Id,
-                        ficha.dictaminante2Id,
-                      ])}
-                    </select>
-                  </div>
-                )}
-
-                {/* PASO 5: APTO PARA TÍTULO PROFESIONAL (CF) */}
-                {accionActiva === 'APTO' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Tesista Activo a Declarar Apto (Individual Serie CF):
-                      </label>
-                      <select
-                        value={tesistaSeleccionadoId}
-                        onChange={(e) =>
-                          setTesistaSeleccionadoId(e.target.value)
-                        }
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {tesistasActivos
-                          .filter((t) => !t.aptoResolucionId)
-                          .map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.persona.nombreCompleto} (
-                              {t.persona.codigoUniversitario || 'S/C'})
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        N.° de Informe de Secretaría Académica:
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={numInformeSec}
-                        onChange={(e) => setNumInformeSec(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs uppercase"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Fecha del Informe:
-                      </label>
-                      <input
-                        type="date"
-                        required
-                        value={fechaInformeSec}
-                        onChange={(e) => setFechaInformeSec(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* PASO 6: FECHA Y HORA DE SUSTENTACIÓN */}
-                {accionActiva === 'FECHA_HORA' && (
-                  <div className="space-y-3">
-                    <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
-                      Distribuya los 3 Dictaminantes vigentes en los cargos de Presidente, Secretario y Vocal. El Asesor (
-                      <b>{asesorActualNombre || 'Asesor'}</b>) se integra automáticamente como 4.° miembro.
-                    </div>
-                    <div className="grid grid-cols-1 gap-2">
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Presidente del Jurado:
-                        </label>
-                        <select
-                          value={presidenteId}
-                          onChange={(e) => setPresidenteId(e.target.value)}
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                        >
-                          {ternaVigentesOpciones.map((d) => (
-                            <option key={d.id} value={d.id}>
-                              {d.nombre}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Secretario del Jurado:
-                        </label>
-                        <select
-                          value={secretarioId}
-                          onChange={(e) => setSecretarioId(e.target.value)}
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                        >
-                          {ternaVigentesOpciones.map((d) => (
-                            <option key={d.id} value={d.id}>
-                              {d.nombre}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Vocal / Dictaminante:
-                        </label>
-                        <select
-                          value={vocalId}
-                          onChange={(e) => setVocalId(e.target.value)}
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                        >
-                          {ternaVigentesOpciones.map((d) => (
-                            <option key={d.id} value={d.id}>
-                              {d.nombre}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Fecha Programada:
-                        </label>
-                        <input
-                          type="date"
-                          required
-                          value={fechaSustProgramada}
-                          onChange={(e) =>
-                            setFechaSustProgramada(e.target.value)
-                          }
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Hora (24h HH:mm):
-                        </label>
-                        <input
-                          type="time"
-                          required
-                          value={horaSustProgramada}
-                          onChange={(e) =>
-                            setHoraSustProgramada(e.target.value)
-                          }
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Modalidad:
-                        </label>
-                        <select
-                          value={modalidadSust}
-                          onChange={(e) =>
-                            setModalidadSust(
-                              e.target.value as 'PRESENCIAL' | 'VIRTUAL',
-                            )
-                          }
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                        >
-                          <option value="PRESENCIAL">PRESENCIAL</option>
-                          <option value="VIRTUAL">VIRTUAL</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Lugar / Referencia:
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={lugarSust}
-                          onChange={(e) => setLugarSust(e.target.value)}
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* PASO 7: TÍTULO PROFESIONAL (CF) */}
-                {accionActiva === 'TITULO' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Tesista que Aprobó la Sustentación:
-                      </label>
-                      <select
-                        value={tesistaSeleccionadoId}
-                        onChange={(e) =>
-                          setTesistaSeleccionadoId(e.target.value)
-                        }
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {tesistasActivos
-                          .filter((t) => !t.tituloResolucionId)
-                          .map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.persona.nombreCompleto} (
-                              {t.persona.codigoUniversitario || 'S/C'})
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Nota Entera (14 a 20):
-                        </label>
-                        <input
-                          type="number"
-                          min={14}
-                          max={20}
-                          step={1}
-                          required
-                          value={notaSust}
-                          onChange={(e) => setNotaSust(Number(e.target.value))}
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs font-bold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Fecha Real Sustentación:
-                        </label>
-                        <input
-                          type="date"
-                          required
-                          value={fechaSustReal}
-                          onChange={(e) => setFechaSustReal(e.target.value)}
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                        />
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
-                      <span className="text-[10px] font-bold uppercase text-gray-500 block">
-                        Mención Calculada Automáticamente:
-                      </span>
-                      <span className="font-extrabold text-[#1E73BE] text-xs">
-                        {calcularMencionPreview(notaSust)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* COMPLEMENTARIA 1: CAMBIO DE ASESOR */}
-                {accionActiva === 'CAMBIO_ASESOR' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Nuevo Docente Asesor (Excluye Asesor actual y Dictaminantes):
-                      </label>
-                      <select
-                        value={asesorId}
-                        onChange={(e) => setAsesorId(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {renderOpcionesEmbudo([
-                          ficha.asesorDocenteId,
-                          ficha.dictaminante1Id,
-                          ficha.dictaminante2Id,
-                          ficha.dictaminante3Id,
-                        ])}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Causa Oficial del Cambio:
-                      </label>
-                      <select
-                        value={causaIdSeleccionada}
-                        onChange={(e) =>
-                          setCausaIdSeleccionada(Number(e.target.value))
-                        }
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {causas
-                          .filter((c) => c.ambito === 'CAMBIO_ASESOR')
-                          .map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.descripcion}
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    {causaSeleccionadaObj?.requiereDetalleManual && (
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Especificar Detalle Manual de la Causa:
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={detalleCausaManual}
-                          onChange={(e) =>
-                            setDetalleCausaManual(e.target.value)
-                          }
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* COMPLEMENTARIA 2: CAMBIO DE TÍTULO (DICE / DEBE DECIR) */}
-                {accionActiva === 'CAMBIO_TITULO' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block font-bold text-gray-500 mb-1">
-                        DICE (Título Vigente Actual):
-                      </label>
-                      <textarea
-                        rows={2}
-                        readOnly
-                        value={ficha.tituloActual || ''}
-                        className="w-full rounded-lg border border-gray-200 bg-gray-100 p-2 text-xs text-gray-600"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-[#1E73BE] mb-1">
-                        DEBE DECIR (Nuevo Título Modificado):
-                      </label>
-                      <textarea
-                        rows={3}
-                        required
-                        value={tituloProyecto}
-                        onChange={(e) => setTituloProyecto(e.target.value)}
-                        className="w-full rounded-lg border border-blue-400 p-2 text-xs uppercase"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* COMPLEMENTARIA 3: CAMBIO DE DICTAMINANTE */}
-                {accionActiva === 'CAMBIO_DICTAMINANTE' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Dictaminante Vigente que Sale:
-                      </label>
-                      <select
-                        value={dictSalienteId}
-                        onChange={(e) => setDictSalienteId(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {ternaVigentesOpciones.map((d) => (
-                          <option key={d.id} value={d.id}>
-                            {d.nombre}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Nuevo Docente Dictaminante Entrante:
-                      </label>
-                      <select
-                        value={dictEntranteId}
-                        onChange={(e) => setDictEntranteId(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {renderOpcionesEmbudo([
-                          ficha.asesorDocenteId,
-                          ficha.dictaminante1Id,
-                          ficha.dictaminante2Id,
-                          ficha.dictaminante3Id,
-                        ])}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Causa Oficial del Reemplazo:
-                      </label>
-                      <select
-                        value={causaIdSeleccionada}
-                        onChange={(e) =>
-                          setCausaIdSeleccionada(Number(e.target.value))
-                        }
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {causas
-                          .filter((c) => c.ambito === 'CAMBIO_DICTAMINANTE')
-                          .map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.descripcion}
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    {causaSeleccionadaObj?.requiereDetalleManual && (
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Especificar Detalle Manual de la Causa:
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={detalleCausaManual}
-                          onChange={(e) =>
-                            setDetalleCausaManual(e.target.value)
-                          }
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* COMPLEMENTARIA 4: DESISTIMIENTO */}
-                {accionActiva === 'DESISTIMIENTO' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Tesista que Presenta el Desistimiento:
-                      </label>
-                      <select
-                        value={tesistaSeleccionadoId}
-                        onChange={(e) =>
-                          setTesistaSeleccionadoId(e.target.value)
-                        }
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {tesistasActivos.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.persona.nombreCompleto} (
-                            {t.persona.codigoUniversitario || 'S/C'})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Referencia de Solicitud Externa:
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={refSolicitudDesistimiento}
-                        onChange={(e) =>
-                          setRefSolicitudDesistimiento(e.target.value)
-                        }
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs uppercase"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Fundamento / Observación (Opcional):
-                      </label>
-                      <input
-                        type="text"
-                        value={fundamentoDesistimiento}
-                        onChange={(e) =>
-                          setFundamentoDesistimiento(e.target.value)
-                        }
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* COMPLEMENTARIA 5: DEJAR SIN EFECTO (DSE) */}
-                {accionActiva === 'DSE' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Serie de la Resolución DSE:
-                      </label>
-                      <select
-                        value={serieDse}
-                        onChange={(e) =>
-                          setSerieDse(e.target.value as 'ORD' | 'CF')
-                        }
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        <option value="ORD">ORDINARIA (ORD)</option>
-                        <option value="CF">CONSEJO DE FACULTAD (CF)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Seleccionar Resolución(es) VIGENTES a Dejar Sin Efecto:
-                      </label>
-                      <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-lg p-2 space-y-1.5 bg-gray-50">
-                        {resoluciones
-                          .filter(
-                            (r) =>
-                              r.situacionJuridica === 'VIGENTE' &&
-                              r.tipo !== 'DSE',
-                          )
-                          .map((r) => (
-                            <label
-                              key={r.id}
-                              className="flex items-center gap-2 text-xs cursor-pointer"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={idsAfectadosDse.includes(r.id)}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setIdsAfectadosDse((prev) => [
-                                      ...prev,
-                                      r.id,
-                                    ]);
-                                  } else {
-                                    setIdsAfectadosDse((prev) =>
-                                      prev.filter((id) => id !== r.id),
-                                    );
-                                  }
-                                }}
-                              />
-                              <span className="font-mono font-bold">
-                                {r.numeroCompleto}
-                              </span>
-                              <span className="text-gray-600">— {r.tipo}</span>
-                            </label>
-                          ))}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-gray-700 mb-1">
-                        Causa del DSE:
-                      </label>
-                      <select
-                        value={causaIdSeleccionada}
-                        onChange={(e) =>
-                          setCausaIdSeleccionada(Number(e.target.value))
-                        }
-                        className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                      >
-                        {causas
-                          .filter((c) => c.ambito === 'DSE')
-                          .map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.descripcion}
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    {causaSeleccionadaObj?.requiereDetalleManual && (
-                      <div>
-                        <label className="block font-bold text-gray-700 mb-1">
-                          Especificar Detalle Manual de la Causa:
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={detalleCausaManual}
-                          onChange={(e) =>
-                            setDetalleCausaManual(e.target.value)
-                          }
-                          className="w-full rounded-lg border border-gray-300 p-2 text-xs"
-                        />
-                      </div>
-                    )}
-                    <label className="flex items-center gap-2 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900 font-bold cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={reinicioIntegralDse}
-                        onChange={(e) =>
-                          setReinicioIntegralDse(e.target.checked)
-                        }
-                      />
-                      <span>
-                        Marcar Reinicio Integral en los datos de la resolución DSE
-                      </span>
-                    </label>
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={procesandoAccion}
-                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#1E73BE] py-2.5 px-4 text-xs font-bold text-white shadow hover:bg-[#175B96] disabled:opacity-60 transition"
-                >
-                  {procesandoAccion ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Emitiendo Resolución...</span>
-                    </>
-                  ) : (
-                    <span>Confirmar Emisión y Asignar Número Oficial</span>
-                  )}
-                </button>
-              </form>
-            )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* =================================================================== */}

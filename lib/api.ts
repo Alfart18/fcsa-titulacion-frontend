@@ -224,6 +224,48 @@ export async function abrirPdfAutenticado(
   setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
 }
 
+export interface PrevisualizarPdfPayload {
+  tipo: string;
+  serie?: 'ORD' | 'CF';
+  codigoExpediente?: string;
+  expedienteId?: string;
+  datosEspecificos: Record<string, unknown>;
+  fechaEmision?: string;
+}
+
+export async function previsualizarPdfResolucionApi(
+  payload: PrevisualizarPdfPayload,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const baseUrl = URLS_MICROSERVICIOS.documentos;
+  const token = obtenerToken();
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${baseUrl}/documentos/previsualizar-pdf`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+    signal,
+  });
+
+  if (!response.ok) {
+    const mensaje = await extraerMensajeError(
+      response,
+      'No se pudo generar la vista previa del documento PDF.',
+    );
+    manejarExpiracionSesion(response.status, true);
+    throw new ApiError(response.status, mensaje);
+  }
+
+  return response.blob();
+}
+
 export async function descargarZipPendientesApi(filtros?: {
   serie?: 'ORD' | 'CF';
   expedienteId?: string;
