@@ -22,12 +22,48 @@ export interface LoginResponse {
 
 export type MicroservicioDestino = 'identidad' | 'titulacion' | 'documentos' | 'firmas';
 
-const URLS_MICROSERVICIOS: Record<MicroservicioDestino, string> = {
-  identidad: process.env.NEXT_PUBLIC_IDENTIDAD_API_URL || 'http://localhost:4000/api',
-  titulacion: process.env.NEXT_PUBLIC_TITULACION_API_URL || 'http://localhost:4001/api',
-  documentos: process.env.NEXT_PUBLIC_DOCUMENTOS_API_URL || 'http://localhost:4002/api',
-  firmas: process.env.NEXT_PUBLIC_FIRMAS_API_URL || 'http://localhost:4003/api',
+const PUERTOS_MICROSERVICIOS: Record<MicroservicioDestino, number> = {
+  identidad: 4000,
+  titulacion: 4001,
+  documentos: 4002,
+  firmas: 4003,
 };
+
+const URLS_ENV_MICROSERVICIOS: Record<MicroservicioDestino, string | undefined> = {
+  identidad: process.env.NEXT_PUBLIC_IDENTIDAD_API_URL,
+  titulacion: process.env.NEXT_PUBLIC_TITULACION_API_URL,
+  documentos: process.env.NEXT_PUBLIC_DOCUMENTOS_API_URL,
+  firmas: process.env.NEXT_PUBLIC_FIRMAS_API_URL,
+};
+
+function obtenerBaseUrlServicio(servicio: MicroservicioDestino): string {
+  const envUrl = URLS_ENV_MICROSERVICIOS[servicio]?.trim();
+
+  if (typeof window !== 'undefined') {
+    const hostActual = window.location.hostname;
+    const esHostLocal =
+      hostActual === 'localhost' ||
+      hostActual === '127.0.0.1' ||
+      hostActual === '::1';
+
+    // Si se accede desde otra laptop/dispositivo por IP en la red local,
+    // apunta automáticamente a los microservicios de esa misma IP (salvo envUrl remota explícita).
+    if (!esHostLocal) {
+      if (
+        envUrl &&
+        !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(envUrl)
+      ) {
+        return envUrl.replace(/\/+$/, '');
+      }
+      return `${window.location.protocol}//${hostActual}:${PUERTOS_MICROSERVICIOS[servicio]}/api`;
+    }
+  }
+
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, '');
+  }
+  return `http://localhost:${PUERTOS_MICROSERVICIOS[servicio]}/api`;
+}
 
 const STORAGE_TOKEN_KEY = 'accessToken';
 const STORAGE_USER_KEY = 'usuario';
@@ -50,8 +86,9 @@ export function guardarSesion(data: LoginResponse): void {
   localStorage.setItem(STORAGE_TOKEN_KEY, data.accessToken);
   localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(data.usuario));
 
-  // Cookie sincronizada con SameSite=Strict para protección de rutas en Next.js Middleware
-  document.cookie = `fcsa_token=${data.accessToken}; path=/; max-age=28800; SameSite=Strict`;
+  // Cookie sincronizada con SameSite=Lax (sin Secure en HTTP local/LAN para evitar bucle de login)
+  const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = `fcsa_token=${data.accessToken}; path=/; max-age=28800; SameSite=Lax${secureFlag}`;
 }
 
 export function obtenerToken(): string | null {
@@ -74,7 +111,7 @@ export function cerrarSesion(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(STORAGE_TOKEN_KEY);
   localStorage.removeItem(STORAGE_USER_KEY);
-  document.cookie = 'fcsa_token=; path=/; max-age=0; SameSite=Strict';
+  document.cookie = 'fcsa_token=; path=/; max-age=0; SameSite=Lax';
 }
 
 function manejarExpiracionSesion(status: number, autenticado: boolean): void {
@@ -125,7 +162,7 @@ export async function apiFetch<T>(
     ...restOptions
   } = opciones;
 
-  const baseUrl = URLS_MICROSERVICIOS[servicio];
+  const baseUrl = obtenerBaseUrlServicio(servicio);
   const rutaLimpia = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const urlCompleta = `${baseUrl}${rutaLimpia}`;
 
@@ -189,7 +226,7 @@ export async function abrirPdfAutenticado(
   descargar = false,
   nombreArchivoDescarga = 'resolucion_uac.pdf',
 ): Promise<void> {
-  const baseUrl = URLS_MICROSERVICIOS[servicio];
+  const baseUrl = obtenerBaseUrlServicio(servicio);
   const rutaLimpia = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const token = obtenerToken();
 
@@ -237,7 +274,7 @@ export async function previsualizarPdfResolucionApi(
   payload: PrevisualizarPdfPayload,
   signal?: AbortSignal,
 ): Promise<Blob> {
-  const baseUrl = URLS_MICROSERVICIOS.documentos;
+  const baseUrl = obtenerBaseUrlServicio('documentos');
   const token = obtenerToken();
 
   const headers: Record<string, string> = {
@@ -270,7 +307,7 @@ export async function descargarZipPendientesApi(filtros?: {
   serie?: 'ORD' | 'CF';
   expedienteId?: string;
 }): Promise<void> {
-  const baseUrl = URLS_MICROSERVICIOS.firmas;
+  const baseUrl = obtenerBaseUrlServicio('firmas');
   const params = new URLSearchParams();
   if (filtros?.serie) params.set('serie', filtros.serie);
   if (filtros?.expedienteId) params.set('expedienteId', filtros.expedienteId);
