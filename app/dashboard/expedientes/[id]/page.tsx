@@ -40,6 +40,7 @@ import {
   UsuarioSesion,
 } from '@/lib/api';
 import { useSidebar } from '../../sidebar-context';
+import { SelectorDocente } from './selector-docente';
 
 type EstadoExpediente = 'EN_PROCESO' | 'FINALIZADO' | 'ANULADO';
 type EstadoTesista = 'ACTIVO' | 'APTO' | 'DESISTIDO' | 'TITULADO';
@@ -1141,62 +1142,6 @@ export default function ExpedienteDetallePage() {
     window.open(previewUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const renderOpcionesEmbudo = (excluirIds: Array<string | null | undefined>) => {
-    const filtrados = docentesEmbudo.filter(
-      (d) => !excluirIds.includes(d.docenteId),
-    );
-    const n1 = filtrados.filter((d) => d.nivelPrioridad === 1);
-    const n2 = filtrados.filter((d) => d.nivelPrioridad === 2);
-    const n3 = filtrados.filter((d) => d.nivelPrioridad === 3);
-
-    return (
-      <>
-        {n1.length > 0 && (
-          <optgroup label="★ Nivel 1: Docentes de la misma Escuela Profesional">
-            {n1.map((d) => (
-              <option key={d.docenteId} value={d.docenteId}>
-                {d.nombreParaResolucion} (
-                {d.escuelaProfesional.nombre.replace(
-                  'Escuela Profesional de ',
-                  '',
-                )}
-                )
-              </option>
-            ))}
-          </optgroup>
-        )}
-        {n2.length > 0 && (
-          <optgroup label="● Nivel 2: Mismo Departamento Académico">
-            {n2.map((d) => (
-              <option key={d.docenteId} value={d.docenteId}>
-                {d.nombreParaResolucion} (
-                {d.departamentoAcademico.nombre.replace(
-                  'Departamento Académico de ',
-                  '',
-                )}
-                )
-              </option>
-            ))}
-          </optgroup>
-        )}
-        {n3.length > 0 && (
-          <optgroup label="◆ Nivel 3: Otros Departamentos FCSa (Interdisciplinario)">
-            {n3.map((d) => (
-              <option key={d.docenteId} value={d.docenteId}>
-                {d.nombreParaResolucion} — [
-                {d.departamentoAcademico.nombre.replace(
-                  'Departamento Académico de ',
-                  '',
-                )}
-                ]
-              </option>
-            ))}
-          </optgroup>
-        )}
-      </>
-    );
-  };
-
   // Construye y envía POST /resoluciones/emitir con CrearResolucionDto exacto
   const handleEjecutarEmision = async (e: FormEvent) => {
     e.preventDefault();
@@ -1575,15 +1520,14 @@ export default function ExpedienteDetallePage() {
                 <div className="space-y-3">
                   <div>
                     <label className="block font-bold text-gray-700 mb-1">
-                      Seleccionar Docente Asesor (Embudo de 3 Niveles):
+                      Seleccionar Docente Asesor:
                     </label>
-                    <select
+                    <SelectorDocente
                       value={asesorId}
-                      onChange={(e) => setAsesorId(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 p-2.5 text-xs bg-white"
-                    >
-                      {renderOpcionesEmbudo([])}
-                    </select>
+                      onChange={setAsesorId}
+                      docentes={docentesEmbudo}
+                      nombreEscuela={ficha.escuelaProfesional.nombre}
+                    />
                   </div>
                   <div>
                     <label className="block font-bold text-gray-700 mb-1">
@@ -1620,25 +1564,27 @@ export default function ExpedienteDetallePage() {
                     <label className="block font-bold text-gray-700 mb-1">
                       Dictaminante 1 (Excluye automáticamente al Asesor):
                     </label>
-                    <select
+                    <SelectorDocente
                       value={dict1Id}
-                      onChange={(e) => setDict1Id(e.target.value)}
+                      onChange={setDict1Id}
+                      docentes={docentesEmbudo}
+                      excluirIds={[ficha.asesorDocenteId]}
+                      nombreEscuela={ficha.escuelaProfesional.nombre}
                       className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                    >
-                      {renderOpcionesEmbudo([ficha.asesorDocenteId])}
-                    </select>
+                    />
                   </div>
                   <div>
                     <label className="block font-bold text-gray-700 mb-1">
                       Dictaminante 2 (Excluye Asesor y Dictaminante 1):
                     </label>
-                    <select
+                    <SelectorDocente
                       value={dict2Id}
-                      onChange={(e) => setDict2Id(e.target.value)}
+                      onChange={setDict2Id}
+                      docentes={docentesEmbudo}
+                      excluirIds={[ficha.asesorDocenteId, dict1Id]}
+                      nombreEscuela={ficha.escuelaProfesional.nombre}
                       className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                    >
-                      {renderOpcionesEmbudo([ficha.asesorDocenteId, dict1Id])}
-                    </select>
+                    />
                   </div>
                 </div>
               )}
@@ -1665,17 +1611,17 @@ export default function ExpedienteDetallePage() {
                   <label className="block font-bold text-gray-700">
                     Seleccionar Tercer Dictaminante (Excluye Asesor y D1/D2):
                   </label>
-                  <select
+                  <SelectorDocente
                     value={dict3Id}
-                    onChange={(e) => setDict3Id(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 p-2.5 text-xs bg-white"
-                  >
-                    {renderOpcionesEmbudo([
+                    onChange={setDict3Id}
+                    docentes={docentesEmbudo}
+                    excluirIds={[
                       ficha.asesorDocenteId,
                       ficha.dictaminante1Id,
                       ficha.dictaminante2Id,
-                    ])}
-                  </select>
+                    ]}
+                    nombreEscuela={ficha.escuelaProfesional.nombre}
+                  />
                 </div>
               )}
 
@@ -1922,18 +1868,19 @@ export default function ExpedienteDetallePage() {
                     <label className="block font-bold text-gray-700 mb-1">
                       Nuevo Docente Asesor (Excluye Asesor actual y Dictaminantes):
                     </label>
-                    <select
+                    <SelectorDocente
                       value={asesorId}
-                      onChange={(e) => setAsesorId(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                    >
-                      {renderOpcionesEmbudo([
+                      onChange={setAsesorId}
+                      docentes={docentesEmbudo}
+                      excluirIds={[
                         ficha.asesorDocenteId,
                         ficha.dictaminante1Id,
                         ficha.dictaminante2Id,
                         ficha.dictaminante3Id,
-                      ])}
-                    </select>
+                      ]}
+                      nombreEscuela={ficha.escuelaProfesional.nombre}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    />
                   </div>
                   <div>
                     <label className="block font-bold text-gray-700 mb-1">
@@ -2026,18 +1973,19 @@ export default function ExpedienteDetallePage() {
                     <label className="block font-bold text-gray-700 mb-1">
                       Nuevo Docente Dictaminante Entrante:
                     </label>
-                    <select
+                    <SelectorDocente
                       value={dictEntranteId}
-                      onChange={(e) => setDictEntranteId(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
-                    >
-                      {renderOpcionesEmbudo([
+                      onChange={setDictEntranteId}
+                      docentes={docentesEmbudo}
+                      excluirIds={[
                         ficha.asesorDocenteId,
                         ficha.dictaminante1Id,
                         ficha.dictaminante2Id,
                         ficha.dictaminante3Id,
-                      ])}
-                    </select>
+                      ]}
+                      nombreEscuela={ficha.escuelaProfesional.nombre}
+                      className="w-full rounded-lg border border-gray-300 p-2 text-xs bg-white"
+                    />
                   </div>
                   <div>
                     <label className="block font-bold text-gray-700 mb-1">

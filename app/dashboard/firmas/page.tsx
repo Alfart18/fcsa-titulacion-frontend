@@ -53,6 +53,7 @@ interface ResolucionPendienteItem {
 
 interface ResultadoArchivoLote {
   nombreArchivo: string;
+  origenZip?: string;
   sha256Archivo: string;
   exito: boolean;
   resolucionId?: string;
@@ -162,13 +163,42 @@ export default function FirmasLotesPage() {
     }
   };
 
-  // 3. Gestión de archivos en la Bandeja Drag-and-Drop
+  // 3. Gestión de archivos en la Bandeja Drag-and-Drop (PDFs hasta 5 MB o paquetes .ZIP hasta 25 MB, máx. 25 archivos)
   const agregarArchivosABandeja = (nuevos: File[]) => {
+    const MAX_PDF_BYTES = 5 * 1024 * 1024;
+    const MAX_ZIP_BYTES = 25 * 1024 * 1024;
+    const validos: File[] = [];
+    for (const f of nuevos) {
+      const esZip =
+        f.name.toLowerCase().endsWith('.zip') ||
+        f.type === 'application/zip' ||
+        f.type === 'application/x-zip-compressed';
+      const esPdf =
+        f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf';
+
+      if (!esPdf && !esZip) {
+        toast.warning(`"${f.name}" no es un archivo .PDF ni .ZIP y fue omitido.`);
+        continue;
+      }
+      if (esZip && f.size > MAX_ZIP_BYTES) {
+        toast.warning(`El paquete "${f.name}" supera el límite de 25 MB y fue omitido.`);
+        continue;
+      }
+      if (!esZip && f.size > MAX_PDF_BYTES) {
+        toast.warning(`"${f.name}" supera el límite de 5 MB por PDF y fue omitido.`);
+        continue;
+      }
+      validos.push(f);
+    }
     setArchivosEnBandeja((prev) => {
       const mapa = new Map<string, File>();
       for (const f of prev) mapa.set(`${f.name}-${f.size}`, f);
-      for (const f of nuevos) mapa.set(`${f.name}-${f.size}`, f);
-      return Array.from(mapa.values()).slice(0, 50);
+      for (const f of validos) mapa.set(`${f.name}-${f.size}`, f);
+      const lista = Array.from(mapa.values());
+      if (lista.length > 25) {
+        toast.warning('El límite máximo por envío es de 25 archivos.');
+      }
+      return lista.slice(0, 25);
     });
   };
 
@@ -210,7 +240,7 @@ export default function FirmasLotesPage() {
   // 4. Enviar lote de PDFs al validador criptográfico (POST /api/firmas/validar-lote)
   const handleValidarLote = async () => {
     if (archivosEnBandeja.length === 0) {
-      toast.error('Arrastre o seleccione al menos un archivo PDF para validar.');
+      toast.error('Arrastre o seleccione al menos un archivo PDF o paquete .ZIP para validar.');
       return;
     }
 
@@ -536,7 +566,7 @@ export default function FirmasLotesPage() {
                   2. Recepción y Validación de Lote
                 </h2>
                 <p className="text-xs text-gray-500">
-                  Arrastre de 1 a 50 PDFs firmados (aislamiento archivo por archivo)
+                  Arrastre PDFs firmados o uno o varios archivos .ZIP (descompresión automática y validación archivo por archivo)
                 </p>
               </div>
             </div>
@@ -557,7 +587,7 @@ export default function FirmasLotesPage() {
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".pdf,application/pdf"
+                accept=".pdf,.zip,application/pdf,application/zip,application/x-zip-compressed"
                 onChange={handleFileInputChange}
                 className="hidden"
               />
@@ -565,13 +595,13 @@ export default function FirmasLotesPage() {
                 <UploadCloud className="w-6 h-6 text-[#1E73BE]" />
               </div>
               <p className="text-sm font-semibold text-gray-800">
-                Arrastre y suelte los PDFs firmados aquí
+                Arrastre y suelte los PDFs firmados o el paquete .ZIP aquí
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                o haga clic para seleccionar desde su equipo
+                o haga clic para seleccionar PDFs o archivos .ZIP (ej. descargados de Gmail)
               </p>
               <p className="text-[11px] text-gray-400 mt-2">
-                Verifica cabecera %PDF-, cascada de 3 niveles (ID-TRAMITE + HASH) y firma PKCS#7 / CAdES
+                Descomprime paquetes .ZIP automáticamente y valida cabecera %PDF-, ID-TRAMITE + HASH y firma PKCS#7 / CAdES
               </p>
             </div>
 
@@ -595,35 +625,48 @@ export default function FirmasLotesPage() {
               <div className="max-h-56 overflow-y-auto divide-y divide-gray-100 border border-gray-200 rounded-xl bg-gray-50/50">
                 {archivosEnBandeja.length === 0 ? (
                   <div className="py-8 text-center text-xs text-gray-400">
-                    Ningún archivo en cola. Arrastre sus PDFs firmados o haga clic arriba para seleccionarlos.
+                    Ningún archivo en cola. Arrastre sus PDFs firmados o un archivo .ZIP arriba para validarlos.
                   </div>
                 ) : (
-                  archivosEnBandeja.map((file, idx) => (
-                    <div
-                      key={`${file.name}-${idx}`}
-                      className="p-2.5 px-3.5 flex items-center justify-between gap-2 text-xs bg-white hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <FileText className="w-4 h-4 text-[#1E73BE] shrink-0" />
-                        <div className="truncate">
-                          <p className="font-semibold text-gray-800 truncate">
-                            {file.name}
-                          </p>
-                          <p className="text-[10px] text-gray-400 font-mono">
-                            {formatearTamano(file.size)}
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => eliminarArchivoDeBandeja(idx)}
-                        className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                        title="Quitar archivo de la bandeja"
+                  archivosEnBandeja.map((file, idx) => {
+                    const esZip = file.name.toLowerCase().endsWith('.zip');
+                    return (
+                      <div
+                        key={`${file.name}-${idx}`}
+                        className="p-2.5 px-3.5 flex items-center justify-between gap-2 text-xs bg-white hover:bg-gray-50 transition-colors"
                       >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {esZip ? (
+                            <FolderArchive className="w-4 h-4 text-amber-600 shrink-0" />
+                          ) : (
+                            <FileText className="w-4 h-4 text-[#1E73BE] shrink-0" />
+                          )}
+                          <div className="truncate">
+                            <p className="font-semibold text-gray-800 truncate flex items-center gap-1.5">
+                              <span className="truncate">{file.name}</span>
+                              {esZip && (
+                                <span className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                                  ZIP
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-[10px] text-gray-400 font-mono">
+                              {formatearTamano(file.size)}
+                              {esZip ? ' · Se descomprimirá automáticamente' : ''}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => eliminarArchivoDeBandeja(idx)}
+                          className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          title="Quitar archivo de la bandeja"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -715,6 +758,7 @@ export default function FirmasLotesPage() {
 
                     <p className="text-[11px] text-gray-700">
                       <b>Archivo:</b> {item.nombreArchivo} ({item.idTramiteDetectado})
+                      {item.origenZip ? ` · desde ${item.origenZip}` : ''}
                     </p>
                     <p className="text-[11px] text-gray-700">
                       <b>Certificado X.509 (CN):</b> {item.firmanteCertificado}

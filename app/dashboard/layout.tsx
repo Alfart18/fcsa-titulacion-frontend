@@ -1,7 +1,7 @@
 // Archivo: app/dashboard/layout.tsx
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
@@ -11,7 +11,7 @@ import {
   BookOpen, BarChart3, FileText, Settings, UserSquare2
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { cerrarSesion, obtenerUsuarioSesion, RolUsuario, UsuarioSesion } from '@/lib/api';
+import { apiFetch, cerrarSesion, obtenerUsuarioSesion, RolUsuario, UsuarioSesion } from '@/lib/api';
 
 // IMPORTAMOS EL CONTEXTO DESDE EL ARCHIVO NUEVO
 import { SidebarContext } from './sidebar-context';
@@ -41,7 +41,7 @@ const MENU_ITEMS: ItemNavegacion[] = [
   { nombre: 'Usuarios y Decano Firmante', href: '/dashboard/usuarios', icono: Users, rolesPermitidos: ['ADMIN', 'DECANO'], seccion: 'GOBIERNO', badgeTexto: 'ADMIN / DECANO' },
 ];
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
@@ -55,7 +55,37 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.replace('/login');
       return;
     }
-    setTimeout(() => setUsuario(sesionLocal), 0);
+    let cancelado = false;
+    setTimeout(() => {
+      if (!cancelado) setUsuario(sesionLocal);
+    }, 0);
+
+    // Verifica en vivo contra identidad-service que la cuenta siga ACTIVA y sincroniza el rol real
+    void apiFetch<{ id?: string; sub?: string; rol: RolUsuario; iniciales?: string }>('/auth/me', {
+      servicio: 'identidad',
+    })
+      .then((perfilServidor) => {
+        if (cancelado || !perfilServidor?.rol) return;
+        if (
+          perfilServidor.rol !== sesionLocal.rol ||
+          (perfilServidor.iniciales && perfilServidor.iniciales !== sesionLocal.iniciales)
+        ) {
+          const actualizado: UsuarioSesion = {
+            ...sesionLocal,
+            rol: perfilServidor.rol,
+            iniciales: perfilServidor.iniciales || sesionLocal.iniciales,
+          };
+          localStorage.setItem('usuario', JSON.stringify(actualizado));
+          setUsuario(actualizado);
+        }
+      })
+      .catch(() => {
+        // Si es 401 (cuenta desactivada o token revocado), apiFetch cierra sesión y redirige a /login
+      });
+
+    return () => {
+      cancelado = true;
+    };
   }, [router]);
 
   const handleCerrarSesion = () => {
@@ -216,5 +246,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </div>
     </SidebarContext.Provider>
+  );
+}
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+          <div className="text-sm font-medium text-[#1E73BE] animate-pulse">
+            Cargando entorno institucional FCSa - UAC...
+          </div>
+        </div>
+      }
+    >
+      <DashboardLayoutContent>{children}</DashboardLayoutContent>
+    </Suspense>
   );
 }

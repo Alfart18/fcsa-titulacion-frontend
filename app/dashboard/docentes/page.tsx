@@ -135,7 +135,7 @@ export default function DocentesCatalogoPage() {
 
   // Estado del Simulador del Embudo de 3 Niveles (/personas/docentes/activos)
   const [escuelaEmbudoId, setEscuelaEmbudoId] = useState<number>(0);
-  const [incluirOtrosDeptos, setIncluirOtrosDeptos] = useState(true);
+  const [incluirOtrosDeptos, setIncluirOtrosDeptos] = useState(false);
   const [docentesActivos, setDocentesActivos] = useState<DocenteActivoSelectorItem[]>([]);
   const [cargandoEmbudo, setCargandoEmbudo] = useState(false);
 
@@ -475,7 +475,7 @@ export default function DocentesCatalogoPage() {
               Catálogo Académico de Docentes FCSa — UAC
             </h1>
             <p className="text-sm sm:text-base text-gray-500 mt-1 max-w-3xl">
-              Departamentos Académicos, Escuelas Profesionales, ascensos de grado con inmutabilidad histórica y Embudo de 3 Niveles.
+              Departamentos Académicos, Escuelas Profesionales y registro de docentes activos de la Facultad.
             </p>
           </div>
 
@@ -502,7 +502,7 @@ export default function DocentesCatalogoPage() {
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span>Embudo de 3 Niveles</span>
+                <span>Por Escuela</span>
               </button>
             </div>
 
@@ -766,7 +766,7 @@ export default function DocentesCatalogoPage() {
       )}
 
       {/* =================================================================== */}
-      {/* MODO 2: EMBUDO DE 3 NIVELES (BASADO EN /personas/docentes/activos)  */}
+      {/* MODO 2: DOCENTES POR ESCUELA + OTROS DOCENTES                       */}
       {/* =================================================================== */}
       {modoVista === 'EMBUDO' && (
         <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-5">
@@ -775,18 +775,18 @@ export default function DocentesCatalogoPage() {
               <div className="flex items-center gap-2 text-[#1E73BE]">
                 <Sparkles className="w-4 h-4" />
                 <h3 className="text-sm font-bold">
-                  Priorización en 3 Niveles de Docentes Activos
+                  Docentes Activos por Escuela Profesional
                 </h3>
               </div>
               <p className="text-xs text-gray-500">
-                Prioriza docentes activos de la misma Escuela Profesional, luego del mismo Departamento Académico y finalmente del resto de la Facultad.
+                Muestra primero a los docentes de la escuela seleccionada, con la opción de desplegar a otros docentes de la facultad.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 text-xs">
               <div>
                 <label className="block text-[10px] font-bold uppercase text-gray-500 mb-1">
-                  Escuela del Expediente:
+                  Escuela Profesional:
                 </label>
                 <select
                   value={escuelaEmbudoId}
@@ -800,119 +800,95 @@ export default function DocentesCatalogoPage() {
                   ))}
                 </select>
               </div>
-
-              <label className="flex items-center gap-2 pt-4 cursor-pointer font-semibold text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={incluirOtrosDeptos}
-                  onChange={(e) => setIncluirOtrosDeptos(e.target.checked)}
-                  className="rounded"
-                />
-                <span>Habilitar Nivel 3 (Investigación Interdisciplinaria)</span>
-              </label>
             </div>
           </div>
 
           {cargandoEmbudo ? (
             <div className="py-10 text-center text-xs text-gray-400">
-              Cargando docentes activos y calculando priorización en 3 niveles...
+              Cargando docentes activos...
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {/* NIVEL 1: MISMA ESCUELA */}
-              <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+            <div className="space-y-4">
+              {/* DOCENTES DE LA ESCUELA SELECCIONADA */}
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/30 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-extrabold text-emerald-900">
-                    ★ NIVEL 1: Misma Escuela Profesional
+                    Docentes de {escuelaEmbudoObj?.nombre || 'la escuela seleccionada'}
                   </span>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 font-mono text-[11px] font-bold">
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 font-mono text-[11px] font-bold">
                     {nivelesEmbudo.nivel1.length}
                   </span>
                 </div>
-                <p className="text-[11px] text-emerald-800">
-                  Prioridad máxima: Docentes activos adscritos directamente a la Escuela del tesista.
-                </p>
-                <div className="space-y-2">
-                  {nivelesEmbudo.nivel1.map((d) => (
-                    <div
-                      key={d.docenteId}
-                      className="p-3 rounded-lg bg-white border border-emerald-200 shadow-2xs text-xs"
-                    >
-                      <p className="font-bold text-gray-900">
-                        {d.gradoAcademico} {d.nombreCompleto}
-                      </p>
-                      <p className="text-[11px] text-emerald-700 font-semibold mt-0.5">
-                        {d.escuelaProfesional.nombre}
-                      </p>
-                      <p className="text-[10px] text-gray-500">
-                        {d.departamentoAcademico.nombre}
-                      </p>
-                    </div>
-                  ))}
-                </div>
+                {nivelesEmbudo.nivel1.length === 0 ? (
+                  <p className="text-xs text-gray-500 italic">
+                    No hay docentes activos registrados directamente en esta escuela.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {nivelesEmbudo.nivel1.map((d) => (
+                      <div
+                        key={d.docenteId}
+                        className="p-3 rounded-lg bg-white border border-emerald-200 shadow-2xs text-xs"
+                      >
+                        <p className="font-bold text-gray-900">
+                          {d.gradoAcademico} {d.nombreCompleto}
+                        </p>
+                        <p className="text-[11px] text-emerald-700 font-semibold mt-0.5">
+                          {d.escuelaProfesional.nombre}
+                        </p>
+                        <p className="text-[10px] text-gray-500">
+                          {d.departamentoAcademico.nombre}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
-              {/* NIVEL 2: MISMO DEPARTAMENTO ACADÉMICO */}
-              <div className="rounded-xl border-2 border-blue-200 bg-blue-50/40 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-extrabold text-[#1E73BE]">
-                    ● NIVEL 2: Mismo Departamento
+              {/* BOTÓN OTROS DOCENTES */}
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setIncluirOtrosDeptos((prev) => !prev)}
+                  className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-xs font-semibold text-[#1E73BE] hover:bg-blue-50 hover:border-blue-200 transition-colors"
+                >
+                  <span>
+                    {incluirOtrosDeptos
+                      ? 'Ocultar otros docentes de la Facultad'
+                      : `Otros docentes de la Facultad (${docentesActivos.length - nivelesEmbudo.nivel1.length})`}
                   </span>
-                  <span className="px-2 py-0.5 rounded-full bg-blue-200 text-[#1E73BE] font-mono text-[11px] font-bold">
-                    {nivelesEmbudo.nivel2.length}
-                  </span>
-                </div>
-                <p className="text-[11px] text-blue-900">
-                  Docentes activos que comparten el mismo Departamento Académico de la escuela seleccionada.
-                </p>
-                <div className="space-y-2">
-                  {nivelesEmbudo.nivel2.map((d) => (
-                    <div
-                      key={d.docenteId}
-                      className="p-3 rounded-lg bg-white border border-blue-200 shadow-2xs text-xs"
-                    >
-                      <p className="font-bold text-gray-900">
-                        {d.gradoAcademico} {d.nombreCompleto}
-                      </p>
-                      <p className="text-[11px] text-[#1E73BE] font-semibold mt-0.5">
-                        {d.escuelaProfesional.nombre}
-                      </p>
-                      <p className="text-[10px] text-gray-500">
-                        {d.departamentoAcademico.nombre}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
+                </button>
 
-              {/* NIVEL 3: OTROS DEPARTAMENTOS */}
-              <div className="rounded-xl border-2 border-amber-200 bg-amber-50/40 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-extrabold text-amber-900">
-                    ◆ NIVEL 3: Otros Departamentos
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 font-mono text-[11px] font-bold">
-                    {nivelesEmbudo.nivel3.length}
-                  </span>
-                </div>
-                <p className="text-[11px] text-amber-800">
-                  Habilitados para investigaciones interdisciplinarias sin bloquear al operador.
-                </p>
-                <div className="space-y-2">
-                  {nivelesEmbudo.nivel3.map((d) => (
-                    <div
-                      key={d.docenteId}
-                      className="p-3 rounded-lg bg-white border border-amber-200 shadow-2xs text-xs"
-                    >
-                      <p className="font-bold text-gray-900">
-                        {d.gradoAcademico} {d.nombreCompleto}
-                      </p>
-                      <p className="text-[11px] text-amber-800 font-semibold mt-0.5">
-                        {d.departamentoAcademico.nombre}
-                      </p>
+                {incluirOtrosDeptos && (
+                  <div className="rounded-xl border border-blue-200 bg-blue-50/30 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold text-[#1E73BE]">
+                        Otros docentes de la Facultad
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-blue-100 text-[#1E73BE] font-mono text-[11px] font-bold">
+                        {nivelesEmbudo.nivel2.length + nivelesEmbudo.nivel3.length}
+                      </span>
                     </div>
-                  ))}
-                </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {[...nivelesEmbudo.nivel2, ...nivelesEmbudo.nivel3].map((d) => (
+                        <div
+                          key={d.docenteId}
+                          className="p-3 rounded-lg bg-white border border-blue-200 shadow-2xs text-xs"
+                        >
+                          <p className="font-bold text-gray-900">
+                            {d.gradoAcademico} {d.nombreCompleto}
+                          </p>
+                          <p className="text-[11px] text-[#1E73BE] font-semibold mt-0.5">
+                            {d.escuelaProfesional.nombre}
+                          </p>
+                          <p className="text-[10px] text-gray-500">
+                            {d.departamentoAcademico.nombre}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

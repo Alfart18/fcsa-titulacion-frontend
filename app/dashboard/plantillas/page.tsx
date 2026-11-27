@@ -113,11 +113,79 @@ const ETIQUETAS_TIPO: Record<TipoResolucion, string> = {
   DESISTIMIENTO: 'Complementaria · Desistimiento',
 };
 
-function sanitizarHtmlBasico(html: string): string {
-  return html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    .replace(/javascript:/gi, '');
+const ETIQUETAS_HTML_SEGURAS = new Set([
+  'DIV',
+  'P',
+  'SPAN',
+  'STRONG',
+  'B',
+  'EM',
+  'I',
+  'U',
+  'BR',
+  'HR',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'UL',
+  'OL',
+  'LI',
+  'TABLE',
+  'THEAD',
+  'TBODY',
+  'TR',
+  'TH',
+  'TD',
+  'BLOCKQUOTE',
+]);
+
+const ATRIBUTOS_HTML_SEGUROS = new Set(['class']);
+
+function sanitizarHtmlSeguro(html: string): string {
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+    return '';
+  }
+
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  const limpiarNodo = (nodo: Node): void => {
+    const hijos = Array.from(nodo.childNodes);
+    for (const hijo of hijos) {
+      if (hijo.nodeType === Node.ELEMENT_NODE) {
+        const el = hijo as Element;
+        const tag = el.tagName.toUpperCase();
+        if (!ETIQUETAS_HTML_SEGURAS.has(tag)) {
+          // Eliminar por completo etiquetas peligrosas con su contenido; desempaquetar el resto
+          if (
+            ['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'MATH', 'TEMPLATE', 'FORM'].includes(
+              tag,
+            )
+          ) {
+            el.remove();
+          } else {
+            limpiarNodo(el);
+            const frag = doc.createDocumentFragment();
+            while (el.firstChild) frag.appendChild(el.firstChild);
+            el.replaceWith(frag);
+          }
+          continue;
+        }
+
+        for (const attr of Array.from(el.attributes)) {
+          if (!ATRIBUTOS_HTML_SEGUROS.has(attr.name.toLowerCase())) {
+            el.removeAttribute(attr.name);
+          }
+        }
+        limpiarNodo(el);
+      } else if (hijo.nodeType === Node.COMMENT_NODE) {
+        hijo.remove();
+      }
+    }
+  };
+
+  limpiarNodo(doc.body);
+  return doc.body.innerHTML;
 }
 
 export default function PlantillasResolucionPage() {
@@ -953,7 +1021,7 @@ export default function PlantillasResolucionPage() {
                         <div
                           className="prose prose-sm max-w-none text-gray-800 space-y-3 [&_h2]:text-center [&_h2]:text-base [&_h2]:font-bold [&_h2]:my-3 [&_ul]:list-disc [&_ul]:pl-6 [&_p]:leading-relaxed"
                           dangerouslySetInnerHTML={{
-                            __html: sanitizarHtmlBasico(
+                            __html: sanitizarHtmlSeguro(
                               previewData.cuerpoHtmlRenderizado,
                             ),
                           }}
